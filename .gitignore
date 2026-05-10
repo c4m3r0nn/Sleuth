@@ -1,0 +1,41 @@
+# secrets
+.env
+.env.*
+!.env.example
+credentials.json
+client_secret*.json
+token.json
+*.pem
+*.key
+
+# data
+data/
+outputs/
+logs/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# os
+.DS_Store
+Thumbs.db
+
+# editor
+.vscode/
+.idea/
+*.swp
