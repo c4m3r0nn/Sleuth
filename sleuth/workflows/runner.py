@@ -28,8 +28,9 @@ from sleuth.ui.console import (
 
 def _slugify(s: str, max_len: int = 50) -> str:
     s = re.sub(r"\s+", "-", s.strip().lower())
-    s = re.sub(r"[^a-z0-9._-]", "", s)
-    return (s[:max_len] or "run").strip("-")
+    s = re.sub(r"[^a-z0-9_-]", "", s)
+    s = re.sub(r"-+", "-", s)
+    return (s[:max_len] or "run").strip("-") or "run"
 
 
 def _markdown_for_run(
@@ -193,15 +194,15 @@ def run_research(
         store.finish_run(run_id, status="error", error=error)
         if not quiet:
             bonk(f"{verb_dict.pick('error')}: {error}")
-        # Optional notify on failure
+        # Optional notify on failure (fan out to whatever's configured)
         if notify:
             try:
-                from sleuth.notify import send_telegram, is_telegram_configured
-                if is_telegram_configured():
-                    send_telegram(
-                        f"*sleuth* {verb_dict.pick('error').lower()} on `{provider_name}/{model}`\n```\n{error[:400]}\n```",
-                        silent=True,
-                    )
+                from sleuth.notify import notify_all
+                notify_all(
+                    f"*sleuth* {verb_dict.pick('error').lower()} on "
+                    f"`{provider_name}/{model}`\n```\n{error[:400]}\n```",
+                    silent=True,
+                )
             except Exception:
                 pass
         raise
@@ -245,25 +246,24 @@ def run_research(
 
     if notify:
         try:
-            from sleuth.notify import send_telegram, is_telegram_configured
-            if is_telegram_configured():
-                summary = (result.text or "").strip().split("\n", 1)[0][:400]
-                msg_lines = [
-                    f"*sleuth* {verb_dict.pick('done').lower()} - `{provider_name}/{model}`",
-                    "",
-                    f"_{prompt[:200]}_",
-                    "",
-                    summary,
-                ]
-                if gdrive_url:
-                    msg_lines.append("")
-                    msg_lines.append(f"[doc]({gdrive_url})")
-                send_telegram("\n".join(msg_lines), silent=False)
-                if not quiet:
-                    tick(f"{verb_dict.pick('ping')}.")
+            from sleuth.notify import notify_all
+            summary = (result.text or "").strip().split("\n", 1)[0][:400]
+            msg_lines = [
+                f"*sleuth* {verb_dict.pick('done').lower()} - `{provider_name}/{model}`",
+                "",
+                f"_{prompt[:200]}_",
+                "",
+                summary,
+            ]
+            if gdrive_url:
+                msg_lines.append("")
+                msg_lines.append(f"[doc]({gdrive_url})")
+            delivered = notify_all("\n".join(msg_lines))
+            if delivered and not quiet:
+                tick(f"{verb_dict.pick('ping')} via {', '.join(delivered)}.")
         except Exception as e:  # noqa: BLE001
             if not quiet:
-                bonk(f"telegram skipped: {e}")
+                bonk(f"notify skipped: {e}")
 
     fresh = store.get_run(run_id) or run
     if not quiet:

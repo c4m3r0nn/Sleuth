@@ -26,7 +26,8 @@ from sleuth.ui.console import bonk, fact, header, tick
 
 app = typer.Typer(
     add_completion=False,
-    no_args_is_help=True,
+    no_args_is_help=False,
+    invoke_without_command=True,
     rich_markup_mode="rich",
     help="sleuth - a pocket research gremlin for the terminal.",
 )
@@ -42,14 +43,26 @@ def version_callback(value: bool) -> None:
         raise typer.Exit()
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main(
+    ctx: typer.Context,
     version: bool = typer.Option(
         False, "--version", callback=version_callback, is_eager=True,
         help="Show version and exit.",
     ),
 ) -> None:
-    pass
+    """No command? Drop into the interactive shell."""
+    if ctx.invoked_subcommand is None:
+        from sleuth.repl import repl
+        repl()
+        raise typer.Exit()
+
+
+@app.command()
+def shell() -> None:
+    """Open the interactive sleuth shell (same as bare `sleuth`)."""
+    from sleuth.repl import repl
+    repl()
 
 
 # --------------------------------------------------------------------------- #
@@ -169,8 +182,18 @@ def show(run_id: str) -> None:
 
 
 @app.command()
+def setup() -> None:
+    """Interactive wizard: ask which models you want, paste keys, write .env."""
+    from sleuth.setup_wizard import run_wizard
+
+    settings = get_settings()
+    env_path = settings.db_path.parent.parent / ".env"
+    run_wizard(env_path)
+
+
+@app.command()
 def init() -> None:
-    """First-run nudge: makes sure dirs exist and points you at .env."""
+    """Show config status. Doesn't change anything; run `sleuth setup` for that."""
     settings = get_settings()
     console.print(banner())
     fact("data dir", str(settings.data_dir))
@@ -178,7 +201,7 @@ def init() -> None:
     fact("db", str(settings.db_path))
     env_path = settings.db_path.parent.parent / ".env"
     if not env_path.exists():
-        bonk(f"no .env yet. Copy .env.example -> .env and fill in keys.")
+        bonk("no .env yet. run `sleuth setup` for a guided walk-through.")
     else:
         tick(".env found.")
     keys = {
@@ -199,17 +222,24 @@ def init() -> None:
 
 @app.command()
 def ping() -> None:
-    """Send a test Telegram nudge."""
-    from sleuth.notify import send_telegram, is_telegram_configured, NotifyError
+    """Send a test nudge through every configured channel."""
+    from sleuth.notify import (
+        is_telegram_configured,
+        is_discord_configured,
+        notify_all,
+    )
 
-    if not is_telegram_configured():
-        bonk("Telegram not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
+    if not (is_telegram_configured() or is_discord_configured()):
+        bonk(
+            "No notifier configured. Set TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID "
+            "or DISCORD_WEBHOOK_URL in .env."
+        )
         raise typer.Exit(1)
-    try:
-        send_telegram("*sleuth* says hello from your terminal.")
-        tick("Buzzed your phone.")
-    except NotifyError as e:
-        bonk(str(e))
+    delivered = notify_all("*sleuth* says hello from your terminal.")
+    if delivered:
+        tick(f"buzzed: {', '.join(delivered)}.")
+    else:
+        bonk("notifiers configured but all sends failed - check tokens.")
         raise typer.Exit(1)
 
 
@@ -327,6 +357,49 @@ def jobs_show(job_id: str) -> None:
     fact("cron", job.cron_expr or "-")
     fact("drive", "yes" if job.sync_drive else "no")
     fact("notify", "yes" if job.notify else "no")
+
+
+@jobs_app.command("edit")
+def jobs_edit(
+    job_id: str,
+    name: Optional[str] = typer.Option(None, "--name"),
+    prompt: Optional[str] = typer.Option(None, "--prompt"),
+    model: Optional[str] = typer.Option(None, "--model", "-m"),
+    provider: Optional[str] = typer.Option(None, "--provider", "-p"),
+    system: Optional[str] = typer.Option(None, "--system", "-s", help="Pass an empty string to clear."),
+    max_tokens: Optional[int] = typer.Option(None, "--max-tokens"),
+    temperature: Optional[float] = typer.Option(None, "--temp", help="Use -1 to clear."),
+    search: Optional[bool] = typer.Option(None, "--search/--no-search"),
+    drive: Optional[bool] = typer.Option(None, "--drive/--no-drive"),
+    notify: Optional[bool] = typer.Option(None, "--notify/--no-notify"),
+) -> None:
+    """Patch fields on a saved job. Only passes you give get changed."""
+    store = get_store()
+    job = store.get_job(job_id)
+    if not job:
+        bonk(f"no job '{job_id}'.")
+        raise typer.Exit(1)
+
+    fields: dict = {}
+    if name is not None: fields["name"] = name
+    if prompt is not None: fields["prompt"] = prompt
+    if model is not None: fields["model"] = model
+    if provider is not None: fields["provider"] = provider
+    if system is not None:
+        fields["system"] = system if system != "" else None
+    if max_tokens is not None: fields["max_tokens"] = max_tokens
+    if temperature is not None:
+        fields["temperature"] = None if temperature < 0 else temperature
+    if search is not None: fields["web_search"] = search
+    if drive is not None: fields["sync_drive"] = drive
+    if notify is not None: fields["notify"] = notify
+
+    if not fields:
+        bonk("nothing to change. pass at least one option.")
+        raise typer.Exit(1)
+
+    store.update_job(job_id, **fields)
+    tick(f"tweaked {job_id}: {', '.join(fields.keys())}")
 
 
 @jobs_app.command("rm")

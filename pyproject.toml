@@ -21,6 +21,7 @@ dependencies = [
   "anthropic>=0.34",
   "google-genai>=0.3",
   "python-crontab>=3.0",
+  "prompt-toolkit>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +29,17 @@ drive = [
   "google-auth>=2.30",
   "google-auth-oauthlib>=1.2",
   "google-api-python-client>=2.130",
+]
+dev = [
+  "pytest>=8.0",
+  "pytest-mock>=3.12",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+filterwarnings = [
+  "ignore::DeprecationWarning",
 ]
 
 [project.scripts]

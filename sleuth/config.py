@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     telegram_bot_token: Optional[str] = Field(default=None, alias="TELEGRAM_BOT_TOKEN")
     telegram_chat_id: Optional[str] = Field(default=None, alias="TELEGRAM_CHAT_ID")
 
+    # discord
+    discord_webhook_url: Optional[str] = Field(default=None, alias="DISCORD_WEBHOOK_URL")
+
     # google drive
     gdrive_client_secret_path: Optional[str] = Field(
         default=None, alias="GDRIVE_CLIENT_SECRET_PATH"

@@ -54,25 +54,28 @@ def fact(label: str, value: str) -> None:
 
 
 @contextmanager
-def phase(name: str, verb_override: str | None = None) -> Iterator["PhaseHandle"]:
-    """Live spinner with a random verb for the phase. Use as a context manager:
+def phase(
+    name: str,
+    verb_override: str | None = None,
+    *,
+    rotate: bool = True,
+    rotate_every: float = 2.5,
+) -> Iterator["PhaseHandle"]:
+    """Live spinner with a random verb that rotates while you wait.
 
         with phase("search") as p:
             do_work()
-            p.update("search", "Pocketing footnotes")
+            p.update("compose")  # explicit transition
     """
+    from sleuth.ui.rotator import VerbRotator
+
     verb = verb_override or verb_dict.pick(name)
     spin_def = spin_lib.frames_for(name)
 
-    # Rich Spinner takes the name of a registered spinner. We feed our frames
-    # in by sub-classing or by registering. The simplest path: use the built-in
-    # 'dots' spinner and replace its definition on the instance.
     spinner = Spinner("dots")
     spinner.frames = spin_def["frames"]
     spinner.interval = spin_def["interval"] / 1000.0
-
-    text = _phase_text(name, verb)
-    spinner.update(text=text)
+    spinner.update(text=_phase_text(name, verb))
 
     live = Live(
         spinner,
@@ -81,10 +84,24 @@ def phase(name: str, verb_override: str | None = None) -> Iterator["PhaseHandle"
         transient=True,
     )
     handle = PhaseHandle(spinner, live, name, verb)
+
+    rotator: VerbRotator | None = None
+    if rotate and verb_override is None:
+        rotator = VerbRotator(
+            phase=name,
+            on_verb=lambda v: handle.update(verb=v),
+            interval=rotate_every,
+        )
+        handle._rotator = rotator
+
     try:
         live.start()
+        if rotator is not None:
+            rotator.start()
         yield handle
     finally:
+        if rotator is not None:
+            rotator.stop()
         live.stop()
 
 
@@ -100,6 +117,7 @@ class PhaseHandle:
     def __init__(self, spinner: Spinner, live: Live, phase_name: str, verb: str):
         self._spinner = spinner
         self._live = live
+        self._rotator = None  # set by phase() if rotation is enabled
         self.phase = phase_name
         self.verb = verb
 
@@ -109,6 +127,8 @@ class PhaseHandle:
             spin_def = spin_lib.frames_for(phase_name)
             self._spinner.frames = spin_def["frames"]
             self._spinner.interval = spin_def["interval"] / 1000.0
+            if self._rotator is not None:
+                self._rotator.set_phase(phase_name)
         if verb is None:
             verb = verb_dict.pick(self.phase)
         self.verb = verb

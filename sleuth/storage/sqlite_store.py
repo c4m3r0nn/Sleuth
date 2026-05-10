@@ -158,6 +158,36 @@ class SqliteStore:
             (schedule_label, cron_expr, utcnow(), job_id),
         )
 
+    _UPDATABLE = {
+        "name", "prompt", "provider", "model", "system",
+        "max_tokens", "temperature",
+        "web_search", "sync_drive", "notify",
+    }
+    _BOOL_FIELDS = {"web_search", "sync_drive", "notify"}
+
+    def update_job(self, job_id: str, **fields: Any) -> None:
+        """Patch one or more fields on a saved job. Bumps updated_at."""
+        if self.get_job(job_id) is None:
+            raise KeyError(job_id)
+        unknown = set(fields) - self._UPDATABLE
+        if unknown:
+            raise ValueError(f"unknown field(s): {sorted(unknown)}")
+
+        clauses: list[str] = []
+        values: list[Any] = []
+        for k, v in fields.items():
+            if k in self._BOOL_FIELDS and v is not None:
+                v = int(bool(v))
+            clauses.append(f"{k} = ?")
+            values.append(v)
+        clauses.append("updated_at = ?")
+        values.append(utcnow())
+        values.append(job_id)
+        self._conn.execute(
+            f"UPDATE jobs SET {', '.join(clauses)} WHERE id = ?",
+            values,
+        )
+
     def delete_job(self, job_id: str) -> None:
         self._conn.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
 
