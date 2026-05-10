@@ -61,16 +61,28 @@ def subcommand_words(parent: str) -> list[str]:
 
 
 _HELP_TEXT = """\
-  built-in commands:
-    ask "..."             one-off research turn
+  built-in commands (type the bare name and i'll walk you through):
+    ask                   one-off research turn
+    jobs new              save a recurring research job
+    jobs list             show saved jobs
+    jobs show             inspect a job
+    jobs edit             change fields on a job
+    jobs run              run a saved job once
+    jobs schedule         hand a job to system cron
+    jobs unschedule       take it back off cron
+    jobs rm               delete a job
+    jobs crontab          show installed cron entries
+    history               browse past runs
+    show                  dump a past run
+    drive auth/status     google drive sync
     models                list available models
-    history               see past runs
-    show <run_id>         dump a past run
-    jobs ...              new | list | show | edit | rm | run | schedule | unschedule
-    drive ...             auth | status
     setup                 first-run wizard (writes .env)
     init                  status check
     ping                  test telegram/discord nudges
+
+  you can also still pass full args yourself, e.g.:
+    ask whats happening today
+    jobs schedule abc --daily 09:00
 
   shell controls:
     help, ?               show this
@@ -111,6 +123,29 @@ def _make_completer():
     return TwoLevelCompleter()
 
 
+def _make_key_bindings():
+    """Bindings: Enter on a highlighted completion accepts it without submitting.
+
+    With complete_while_typing=True we get a popup while you type. If the
+    user has used Tab/arrow-down to highlight a suggestion, pressing Enter
+    fills it in (and stays on the line so they can keep typing args).
+    Pressing Enter on its own (no completion highlighted) submits as normal.
+    """
+    from prompt_toolkit.key_binding import KeyBindings
+    from prompt_toolkit.filters import completion_is_selected
+
+    kb = KeyBindings()
+
+    @kb.add("enter", filter=completion_is_selected)
+    def _accept_completion(event):
+        b = event.current_buffer
+        if b.complete_state and b.complete_state.current_completion:
+            b.apply_completion(b.complete_state.current_completion)
+        b.complete_state = None
+
+    return kb
+
+
 def repl(history_path: Optional[Path] = None) -> None:
     """Run the interactive shell until EOF or `exit`."""
     # Lazy imports — keeps the unit tests independent of prompt_toolkit.
@@ -127,6 +162,7 @@ def repl(history_path: Optional[Path] = None) -> None:
     from sleuth.ui import console
     from sleuth.ui.art import banner
     from sleuth.ui.console import bonk
+    from sleuth.walkthrough import needs_walkthrough, WALK_DISPATCH
 
     settings = get_settings()
     if history_path is None:
@@ -134,27 +170,44 @@ def repl(history_path: Optional[Path] = None) -> None:
     history_path.parent.mkdir(parents=True, exist_ok=True)
     history_path.touch(exist_ok=True)
 
-    style = Style.from_dict({"prompt": "ansibrightyellow bold"})
+    style = Style.from_dict({
+        "prompt": "ansibrightyellow bold",
+        "wkq": "ansibrightcyan",
+    })
     session: PromptSession = PromptSession(
         history=FileHistory(str(history_path)),
         auto_suggest=AutoSuggestFromHistory(),
         completer=_make_completer(),
-        complete_while_typing=False,
+        complete_while_typing=True,
+        key_bindings=_make_key_bindings(),
         style=style,
     )
     prompt_text = FormattedText([("class:prompt", "sleuth> ")])
 
     console.print(banner())
     console.print(
-        "  type a command (e.g. `ask \"what happened today?\"`) or `help`. "
-        "ctrl-d to leave.\n"
+        "  type a command (e.g. `ask` then enter) or `help`. ctrl-d to leave.\n"
+        "  hit a bare command on its own and i'll walk you through the inputs.\n"
     )
+
+    def _dispatch(tokens: list[str]) -> None:
+        try:
+            app(args=tokens, standalone_mode=False)
+        except click.exceptions.UsageError as e:
+            bonk(f"usage: {e.format_message()}")
+        except click.exceptions.Abort:
+            console.print("  (aborted)")
+        except SystemExit:
+            pass
+        except KeyboardInterrupt:
+            console.print("  (interrupted)")
+        except Exception as e:  # noqa: BLE001
+            bonk(f"oof: {type(e).__name__}: {e}")
 
     while True:
         try:
             line = session.prompt(prompt_text)
         except KeyboardInterrupt:
-            # Cancel current input, keep going.
             console.print("  (use `exit` or ctrl-d to leave)")
             continue
         except EOFError:
@@ -178,20 +231,21 @@ def repl(history_path: Optional[Path] = None) -> None:
             console.print(_HELP_TEXT)
             continue
 
-        # Hand off to the Typer app, suppressing its sys.exit behaviour.
-        try:
-            app(args=tokens, standalone_mode=False)
-        except click.exceptions.UsageError as e:
-            bonk(f"usage: {e.format_message()}")
-        except click.exceptions.Abort:
-            console.print("  (aborted)")
-        except SystemExit:
-            # Some sub-flows still raise SystemExit; we eat it so the shell
-            # keeps running.
-            pass
-        except KeyboardInterrupt:
-            console.print("  (interrupted)")
-        except Exception as e:  # noqa: BLE001
-            bonk(f"oof: {type(e).__name__}: {e}")
+        # Bare command? walk the user through it.
+        kind = needs_walkthrough(tokens)
+        if kind is not None:
+            walker = WALK_DISPATCH.get(kind)
+            if walker:
+                try:
+                    argv = walker()
+                except (KeyboardInterrupt, EOFError):
+                    console.print("  (cancelled)")
+                    continue
+                if not argv:
+                    continue
+                _dispatch(argv)
+                continue
+
+        _dispatch(tokens)
 
     console.print("  goodbye, gumshoe.")

@@ -16,6 +16,42 @@ from typing import Iterable, Optional
 # --------------------------------------------------------------------------- #
 
 
+PROVIDER_ENV_KEYS = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "google": "GOOGLE_API_KEY",
+}
+
+
+def load_env_file(path: Path) -> dict[str, str]:
+    """Parse a .env-style file into {KEY: value}. Strips matched quotes."""
+    if not path.exists():
+        return {}
+    out: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if len(value) >= 2 and (
+            (value[0] == value[-1] == '"') or (value[0] == value[-1] == "'")
+        ):
+            value = value[1:-1]
+            # un-escape any escaped double quotes we wrote
+            value = value.replace('\\"', '"').replace("\\\\", "\\")
+        out[key] = value
+    return out
+
+
+def has_any_provider(env: dict[str, str]) -> bool:
+    """True if at least one provider key is set (and non-empty) in `env`."""
+    return any(env.get(var) for var in PROVIDER_ENV_KEYS.values())
+
+
 def _quote(value: str) -> str:
     """Quote a .env value if it contains anything risky."""
     if any(ch in value for ch in (" ", "\t", "#", "'", '"')):
@@ -146,10 +182,46 @@ DEFAULT_MODEL_FOR = {
 }
 
 
+def _short(value: str, n: int = 8) -> str:
+    """For displaying secrets without leaking them: 'sk-abc...wxyz'."""
+    if len(value) <= 2 * n:
+        return value
+    return f"{value[:n]}...{value[-4:]}"
+
+
+def _keep_replace_remove(
+    typer_mod, label: str, current_display: str, *, hide_input: bool = True
+) -> tuple[str, str | None]:
+    """Show that something is already configured and ask what to do.
+
+    Returns (action, new_value):
+      action in {"keep", "replace", "remove"}; new_value only set for replace.
+    """
+    print_choices = (
+        f"  found existing {label} ({current_display}).\n"
+        "    [1] keep  [2] replace  [3] remove"
+    )
+    typer_mod.echo(print_choices)
+    raw = typer_mod.prompt("    choice", default="1")
+    pick = raw.strip().lower()
+    if pick in ("2", "replace", "r"):
+        new_val = typer_mod.prompt(
+            f"    new {label}",
+            hide_input=hide_input,
+            default="",
+            show_default=False,
+        ).strip()
+        return ("replace", new_val or None)
+    if pick in ("3", "remove", "rm"):
+        return ("remove", None)
+    return ("keep", None)
+
+
 def run_wizard(env_path: Path) -> Path:
     """Walk the user through producing a .env file. Returns the written path.
 
-    Imports prompt helpers lazily so the pure helpers above don't pull in typer.
+    Reads any existing .env first so already-configured items can be kept or
+    cleared without forcing the user to re-paste their keys.
     """
     import typer
 
@@ -161,91 +233,158 @@ def run_wizard(env_path: Path) -> Path:
     console.print(banner())
     console.print(
         "  let's wire sleuth up. takes about 2 minutes.\n"
-        "  press enter to skip anything you don't want.\n"
+        "  things you've already set up are recognised - press 1 to keep them.\n"
     )
 
+    existing = load_env_file(env_path)
+    final: dict[str, str] = dict(existing)  # build up the merged result
+
     # 1. providers
-    header("step 1", "which model providers do you have keys for?")
-    providers: dict[str, str] = {}
+    header("step 1", "model providers")
     for prov in ("openai", "anthropic", "google"):
-        if typer.confirm(f"  set up {prov}?", default=(prov == "openai")):
-            key = typer.prompt(
-                f"    paste your {prov.upper()} api key (input hidden)",
-                hide_input=True,
+        var = PROVIDER_ENV_KEYS[prov]
+        current = existing.get(var)
+        if current:
+            action, new_val = _keep_replace_remove(
+                typer, f"{prov} api key", _short(current)
             )
-            if key.strip():
-                providers[prov] = key.strip()
-                tick(f"  {prov} key captured.")
-    if not providers:
-        bonk("you need at least one provider. bailing.")
+            if action == "replace" and new_val:
+                final[var] = new_val
+                tick(f"  {prov} key replaced.")
+            elif action == "remove":
+                final.pop(var, None)
+                tick(f"  {prov} key removed.")
+            # keep: no-op
+        else:
+            default_yes = (prov == "openai" and not has_any_provider(final))
+            if typer.confirm(f"  set up {prov}?", default=default_yes):
+                key = typer.prompt(
+                    f"    paste your {prov.upper()} api key (input hidden)",
+                    hide_input=True,
+                ).strip()
+                if key:
+                    final[var] = key
+                    tick(f"  {prov} key captured.")
+
+    if not has_any_provider(final):
+        bonk("no providers configured. need at least one to do anything useful.")
         raise typer.Exit(1)
 
     # 2. default provider/model
-    header("step 2", "pick the default for `sleuth ask`")
-    if len(providers) == 1:
-        default_provider = next(iter(providers))
-        console.print(f"  only one provider, defaulting to {default_provider}.")
-    else:
-        choices = list(providers.keys())
-        default_provider = typer.prompt(
-            f"  default provider ({'/'.join(choices)})",
-            default=choices[0],
-        )
-        if default_provider not in providers:
-            default_provider = choices[0]
+    header("step 2", "default provider & model for `ask`")
+    available = [
+        prov for prov in ("openai", "anthropic", "google")
+        if final.get(PROVIDER_ENV_KEYS[prov])
+    ]
+    current_default_provider = existing.get("SLEUTH_DEFAULT_PROVIDER", "")
+    if current_default_provider not in available:
+        current_default_provider = available[0]
 
-    suggested = DEFAULT_MODEL_FOR[default_provider]
+    if len(available) == 1:
+        default_provider = available[0]
+        console.print(f"  only {default_provider} configured, defaulting to it.")
+    else:
+        default_provider = typer.prompt(
+            f"  default provider ({'/'.join(available)})",
+            default=current_default_provider,
+        ).strip()
+        if default_provider not in available:
+            default_provider = current_default_provider
+
+    final["SLEUTH_DEFAULT_PROVIDER"] = default_provider
+
+    suggested = existing.get("SLEUTH_DEFAULT_MODEL") or DEFAULT_MODEL_FOR[default_provider]
     console.print(f"  available {default_provider} models:")
     for mid, blurb in MODEL_CATALOG[default_provider]:
         marker = " <-" if mid == suggested else "   "
         console.print(f"    {marker} {mid:<26}  {blurb}")
-    default_model = typer.prompt("  default model", default=suggested)
+    default_model = typer.prompt("  default model", default=suggested).strip()
+    final["SLEUTH_DEFAULT_MODEL"] = default_model
 
     # 3. notifications
     header("step 3", "notifications (optional)")
-    telegram_token = telegram_chat_id = None
-    if typer.confirm("  set up telegram pings?", default=False):
-        console.print(
-            "    1. message @BotFather on Telegram, send /newbot, copy the token.\n"
-            "    2. message your new bot once (any text) so it can DM you.\n"
-            "    3. visit https://api.telegram.org/bot<TOKEN>/getUpdates and grab"
-            "       the chat.id from the JSON."
-        )
-        telegram_token = (typer.prompt("    bot token", default="") or "").strip() or None
-        telegram_chat_id = (typer.prompt("    chat id", default="") or "").strip() or None
 
-    discord_webhook = None
-    if typer.confirm("  set up discord webhook?", default=False):
-        console.print(
-            "    server -> channel -> Edit Channel -> Integrations -> Webhooks\n"
-            "    -> New Webhook -> Copy URL"
+    # telegram
+    if existing.get("TELEGRAM_BOT_TOKEN"):
+        action, new_val = _keep_replace_remove(
+            typer, "telegram bot token", _short(existing["TELEGRAM_BOT_TOKEN"])
         )
-        discord_webhook = (typer.prompt("    webhook url", default="") or "").strip() or None
+        if action == "replace" and new_val:
+            final["TELEGRAM_BOT_TOKEN"] = new_val
+        elif action == "remove":
+            final.pop("TELEGRAM_BOT_TOKEN", None)
+            final.pop("TELEGRAM_CHAT_ID", None)
+        # if keeping token, also let them update chat id
+        if action != "remove" and existing.get("TELEGRAM_CHAT_ID"):
+            chat_action, chat_val = _keep_replace_remove(
+                typer, "telegram chat id", existing["TELEGRAM_CHAT_ID"], hide_input=False,
+            )
+            if chat_action == "replace" and chat_val:
+                final["TELEGRAM_CHAT_ID"] = chat_val
+            elif chat_action == "remove":
+                final.pop("TELEGRAM_CHAT_ID", None)
+    else:
+        if typer.confirm("  set up telegram pings?", default=False):
+            console.print(
+                "    1. message @BotFather on Telegram, send /newbot, copy the token.\n"
+                "    2. message your new bot once (any text) so it can DM you.\n"
+                "    3. visit https://api.telegram.org/bot<TOKEN>/getUpdates and grab\n"
+                "       the chat.id from the JSON."
+            )
+            tok = typer.prompt("    bot token", default="", show_default=False).strip()
+            cid = typer.prompt("    chat id", default="", show_default=False).strip()
+            if tok:
+                final["TELEGRAM_BOT_TOKEN"] = tok
+            if cid:
+                final["TELEGRAM_CHAT_ID"] = cid
+
+    # discord
+    if existing.get("DISCORD_WEBHOOK_URL"):
+        action, new_val = _keep_replace_remove(
+            typer, "discord webhook", _short(existing["DISCORD_WEBHOOK_URL"], 24),
+            hide_input=False,
+        )
+        if action == "replace" and new_val:
+            final["DISCORD_WEBHOOK_URL"] = new_val
+        elif action == "remove":
+            final.pop("DISCORD_WEBHOOK_URL", None)
+    else:
+        if typer.confirm("  set up discord webhook?", default=False):
+            console.print(
+                "    server -> channel -> Edit Channel -> Integrations -> Webhooks\n"
+                "    -> New Webhook -> Copy URL"
+            )
+            url = typer.prompt("    webhook url", default="", show_default=False).strip()
+            if url:
+                final["DISCORD_WEBHOOK_URL"] = url
 
     # 4. drive
     header("step 4", "google drive sync (optional)")
-    drive_secret = drive_folder = None
-    if typer.confirm("  point me at a Drive client_secret.json?", default=False):
-        console.print(
-            "    if you don't have one yet, see\n"
-            "    https://developers.google.com/workspace/guides/create-credentials"
+    if existing.get("GDRIVE_CLIENT_SECRET_PATH"):
+        action, new_val = _keep_replace_remove(
+            typer, "drive client_secret path", existing["GDRIVE_CLIENT_SECRET_PATH"],
+            hide_input=False,
         )
-        drive_secret = (typer.prompt("    path to client_secret*.json", default="") or "").strip() or None
-        drive_folder = (typer.prompt("    parent Drive folder id (blank for root)", default="") or "").strip() or None
+        if action == "replace" and new_val:
+            final["GDRIVE_CLIENT_SECRET_PATH"] = new_val
+        elif action == "remove":
+            final.pop("GDRIVE_CLIENT_SECRET_PATH", None)
+            final.pop("GDRIVE_FOLDER_ID", None)
+    else:
+        if typer.confirm("  point me at a Drive client_secret.json?", default=False):
+            console.print(
+                "    if you don't have one yet, see\n"
+                "    https://developers.google.com/workspace/guides/create-credentials"
+            )
+            sp = typer.prompt("    path to client_secret*.json", default="", show_default=False).strip()
+            fid = typer.prompt("    parent Drive folder id (blank for root)", default="", show_default=False).strip()
+            if sp:
+                final["GDRIVE_CLIENT_SECRET_PATH"] = sp
+            if fid:
+                final["GDRIVE_FOLDER_ID"] = fid
 
     # 5. write
-    plan = plan_env_from_answers(
-        providers=providers,
-        default_provider=default_provider,
-        default_model=default_model,
-        telegram_token=telegram_token,
-        telegram_chat_id=telegram_chat_id,
-        discord_webhook=discord_webhook,
-        gdrive_client_secret_path=drive_secret,
-        gdrive_folder_id=drive_folder,
-    )
-
-    backup = write_env_file(env_path, plan, sections=ENV_SECTIONS)
+    backup = write_env_file(env_path, final, sections=ENV_SECTIONS)
 
     console.print()
     tick(f".env written to {env_path}")
@@ -254,10 +393,11 @@ def run_wizard(env_path: Path) -> Path:
     console.print()
     console.print(
         "  ready to go. try:\n"
-        "    sleuth ask \"what's a positive news story from today?\"\n"
-        "    sleuth jobs new\n"
-        "    sleuth ping"
+        "    sleuth                  # opens the interactive shell\n"
+        "    sleuth ask              # walks you through a one-off\n"
+        "    sleuth jobs new         # save a recurring research job\n"
+        "    sleuth ping             # test your notifiers"
     )
-    if drive_secret:
-        console.print("    sleuth drive auth   # to finish drive setup")
+    if final.get("GDRIVE_CLIENT_SECRET_PATH"):
+        console.print("    sleuth drive auth       # finish drive setup")
     return env_path

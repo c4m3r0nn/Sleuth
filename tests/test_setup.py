@@ -121,3 +121,87 @@ class TestPlanFromAnswers:
         assert "GOOGLE_API_KEY" not in plan
         assert "TELEGRAM_BOT_TOKEN" not in plan
         assert "DISCORD_WEBHOOK_URL" not in plan
+
+
+class TestLoadEnvFile:
+    def test_missing_file_returns_empty(self, tmp_path):
+        from sleuth.setup_wizard import load_env_file
+        assert load_env_file(tmp_path / "nope.env") == {}
+
+    def test_reads_pairs(self, tmp_path):
+        from sleuth.setup_wizard import load_env_file
+        p = tmp_path / ".env"
+        p.write_text("OPENAI_API_KEY=sk-abc\nFOO=bar\n", encoding="utf-8")
+        env = load_env_file(p)
+        assert env["OPENAI_API_KEY"] == "sk-abc"
+        assert env["FOO"] == "bar"
+
+    def test_strips_double_quotes(self, tmp_path):
+        from sleuth.setup_wizard import load_env_file
+        p = tmp_path / ".env"
+        p.write_text('FOO="hello world"\nBAR=plain\n', encoding="utf-8")
+        env = load_env_file(p)
+        assert env["FOO"] == "hello world"
+        assert env["BAR"] == "plain"
+
+    def test_strips_single_quotes(self, tmp_path):
+        from sleuth.setup_wizard import load_env_file
+        p = tmp_path / ".env"
+        p.write_text("FOO='quoted'\n", encoding="utf-8")
+        assert load_env_file(p)["FOO"] == "quoted"
+
+    def test_ignores_comments_and_blank_lines(self, tmp_path):
+        from sleuth.setup_wizard import load_env_file
+        p = tmp_path / ".env"
+        p.write_text("# providers\nOPENAI_API_KEY=sk\n\n# noise\nX=1\n", encoding="utf-8")
+        env = load_env_file(p)
+        assert env == {"OPENAI_API_KEY": "sk", "X": "1"}
+
+    def test_empty_value_kept_as_empty_string(self, tmp_path):
+        from sleuth.setup_wizard import load_env_file
+        p = tmp_path / ".env"
+        p.write_text("EMPTY=\nFILLED=x\n", encoding="utf-8")
+        env = load_env_file(p)
+        assert env["EMPTY"] == ""
+        assert env["FILLED"] == "x"
+
+    def test_handles_equals_in_value(self, tmp_path):
+        """A value containing = (e.g. base64) shouldn't get truncated."""
+        from sleuth.setup_wizard import load_env_file
+        p = tmp_path / ".env"
+        p.write_text("KEY=abc=def==\n", encoding="utf-8")
+        assert load_env_file(p)["KEY"] == "abc=def=="
+
+    def test_round_trip_with_write_env_file(self, tmp_path):
+        from sleuth.setup_wizard import load_env_file, write_env_file
+        p = tmp_path / ".env"
+        write_env_file(p, {"OPENAI_API_KEY": "sk", "FOO": "hello world"})
+        env = load_env_file(p)
+        assert env["OPENAI_API_KEY"] == "sk"
+        assert env["FOO"] == "hello world"
+
+
+class TestHasAnyProvider:
+    def test_empty_is_false(self):
+        from sleuth.setup_wizard import has_any_provider
+        assert has_any_provider({}) is False
+
+    def test_unrelated_keys_only_is_false(self):
+        from sleuth.setup_wizard import has_any_provider
+        assert has_any_provider({"TELEGRAM_BOT_TOKEN": "x"}) is False
+
+    def test_openai_set(self):
+        from sleuth.setup_wizard import has_any_provider
+        assert has_any_provider({"OPENAI_API_KEY": "sk"}) is True
+
+    def test_anthropic_set(self):
+        from sleuth.setup_wizard import has_any_provider
+        assert has_any_provider({"ANTHROPIC_API_KEY": "ant"}) is True
+
+    def test_google_set(self):
+        from sleuth.setup_wizard import has_any_provider
+        assert has_any_provider({"GOOGLE_API_KEY": "g"}) is True
+
+    def test_empty_value_doesnt_count(self):
+        from sleuth.setup_wizard import has_any_provider
+        assert has_any_provider({"OPENAI_API_KEY": ""}) is False

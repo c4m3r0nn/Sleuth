@@ -44,17 +44,51 @@ On a Raspberry Pi 5, install the same way (no system packages required).
 ## Interactive shell
 
 Type `sleuth` with no arguments and you drop into a session with history,
-tab-completion, and the same commands you'd use from a regular shell:
+live autocomplete, and command walkthroughs.
+
+**Walkthrough mode (recommended).** Type the bare command name, hit enter,
+and sleuth prompts you for each input - no quotes needed.
 
 ```
-sleuth> ask "what's a positive news story from today?"
-sleuth> jobs list
+sleuth> ask
+  what should sleuth dig up? what happened in AI today
+  tweak provider/model? [y/N]
+sleuth> jobs new
+  job name (e.g. 'morning-news') morning-ai-news
+  research prompt summarise the top 5 AI stories from the last 24 hours
+  which provider?
+     <- [1] openai
+        [2] anthropic
+        [3] google
+    > 1
+  ...
+sleuth> jobs schedule
+  which job?
+        [1] morning-ai-news (a1b2c3d4)
+    > 1
+  schedule kind?
+     <- [1] daily
+        [2] weekly
+        [3] hourly
+        ...
+    > 1
+  time (HH:MM, 24h) 09:00
+```
+
+**Inline mode.** You can also still pass arguments yourself:
+
+```
+sleuth> ask whats happening today        # no quotes needed for one-line prompts
 sleuth> jobs schedule abc123 --daily 09:00
 sleuth> exit
 ```
 
+**Autocomplete.** Suggestions pop up as you type. `Tab` cycles them; arrow-down
++ `Enter` accepts the highlighted one (and stays on the line so you can keep
+typing). `Enter` on its own submits.
+
 Ctrl-D or `exit`/`quit`/`q` leaves. Up/down browses history (saved at
-`./.sleuth_history`). Tab completes commands and `jobs`/`drive` subcommands.
+`./.sleuth_history`).
 
 ## Commands at a glance
 
