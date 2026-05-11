@@ -247,6 +247,82 @@ sleuth catchup --dry-run  # just list what would run
 Catch-up runs each missed job **once**, not once per missed slot — fresh
 research beats five stale snapshots.
 
+## Google Drive sync
+
+sleuth can optionally mirror every run to a Google Doc. The setup is
+**per-user** — your credentials never touch the repo, and the gitignore
+already excludes the files that would be sensitive. If you fork or share
+this repo, the next person needs to run `sleuth drive setup` for their
+own account; nothing leaks from yours.
+
+### One-time setup
+
+```bash
+sleuth drive setup
+```
+
+The walkthrough opens the relevant Google Cloud Console pages and asks
+you for the path to the downloaded `client_secret*.json`. Click-by-click
+it'll have you:
+
+1. **Create a tiny Cloud project** (called "sleuth" or whatever).
+2. **Enable the Drive API** on it.
+3. **Configure the OAuth consent screen** as "external" with yourself as
+   a test user. (No publishing, no review — test mode is fine for one
+   person.)
+4. **Create an OAuth client** of type **"TVs and Limited Input devices"**.
+   Download the JSON it offers.
+5. **Tell sleuth where that file is.** sleuth writes the path to your
+   `.env` (gitignored) and writes the long-lived auth token to
+   `~/.config/sleuth/drive_token.json` (outside the repo entirely).
+
+### Authorising on a headless Pi
+
+`sleuth drive setup` (or `sleuth drive auth` once setup is done) uses
+**Google's Device Authorization Grant** — exactly the same flow GitHub
+CLI uses for `gh auth login`. You see something like this in the Pi
+terminal:
+
+```
+  authorise sleuth on your Google account:
+
+      ████ ▄▄▄▄▄ █▀█ █▀ ▄ ▀ ████
+      ████ █   █ █ ▀▀▄▄▀▀█ ████
+      ...
+
+  scan the QR above, or open: https://www.google.com/device
+  and enter this code:  ABCD-EFGH
+
+  waiting up to 30 min for you to authorise...
+```
+
+Scan the QR with your phone (or any device with a browser), tap **allow**
+on Google's page, and the Pi catches the token and saves it. No browser
+needed on the Pi itself.
+
+### What gets shared if you share the repo?
+
+| File | Where | Committed? |
+| --- | --- | --- |
+| `.env` (your provider keys, Drive path) | project root | **no** — gitignored |
+| `client_secret*.json` (Google OAuth client) | wherever you put it | **no** — name pattern is gitignored |
+| `~/.config/sleuth/drive_token.json` (auth token) | your home | **no** — outside repo |
+| `data/sleuth.db` (your run history) | project root | **no** — gitignored |
+
+So pushing your fork is safe — only code goes up.
+
+### Using it
+
+Once setup is done, pass `--drive` on any one-off ask:
+
+```bash
+sleuth ask --drive "what happened in AI today?"
+```
+
+Or toggle it on a saved job during `jobs new` / `jobs edit`. Each run
+becomes one Google Doc, optionally inside the folder ID you specified
+during setup.
+
 ## Notifications
 
 sleuth can ping you on **Telegram**, **Discord**, or both when scheduled jobs

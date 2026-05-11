@@ -48,28 +48,26 @@ def _load_credentials():
 
 
 def authorise_interactive() -> Path:
-    """Run the OAuth flow once and persist a token file."""
+    """Run the device-flow auth and save the token.
+
+    Uses Google's Device Authorization Grant so this works on a headless
+    Pi — sleuth prints a URL + 8-character code (with a QR), you authorise
+    on your phone or laptop, the Pi polls until done.
+    """
     settings = get_settings()
     secret = settings.gdrive_client_secret_path
     if not secret or not Path(secret).exists():
         raise DriveNotConfigured(
-            "Set GDRIVE_CLIENT_SECRET_PATH in .env to your client_secret*.json."
+            "Set GDRIVE_CLIENT_SECRET_PATH in .env to your client_secret*.json.\n"
+            "Run `sleuth drive setup` for a guided walkthrough."
         )
 
+    from sleuth.storage.gdrive_device import device_flow_authorise, DeviceFlowError
+
     try:
-        from google_auth_oauthlib.flow import InstalledAppFlow  # type: ignore
-    except ImportError as e:
-        raise DriveNotConfigured(
-            "Drive deps missing. Install with: pip install '.[drive]'"
-        ) from e
-
-    flow = InstalledAppFlow.from_client_secrets_file(secret, SCOPES)
-    # Use the console flow so this works on a headless Pi too.
-    creds = flow.run_console() if hasattr(flow, "run_console") else flow.run_local_server(port=0)
-
-    settings.drive_token_path.parent.mkdir(parents=True, exist_ok=True)
-    settings.drive_token_path.write_text(creds.to_json())
-    return settings.drive_token_path
+        return device_flow_authorise(Path(secret), settings.drive_token_path)
+    except DeviceFlowError as e:
+        raise DriveNotConfigured(f"device flow failed: {e}") from e
 
 
 def upload_doc(title: str, body_markdown: str) -> str:

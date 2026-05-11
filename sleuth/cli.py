@@ -722,12 +722,11 @@ def jobs_check(job_id: str) -> None:
 
 @drive_app.command("auth")
 def drive_auth() -> None:
-    """One-time OAuth dance for Google Drive."""
+    """Re-run the device-flow auth (refresh / re-grant Drive access)."""
     from sleuth.storage.gdrive import authorise_interactive, DriveNotConfigured
 
     try:
-        path = authorise_interactive()
-        tick(f"token saved to {path}")
+        authorise_interactive()
     except DriveNotConfigured as e:
         bonk(str(e))
         raise typer.Exit(1)
@@ -739,7 +738,113 @@ def drive_status() -> None:
     if gdrive.is_configured():
         tick("Drive token present.")
     else:
-        bonk("No Drive token. Run `sleuth drive auth` first.")
+        bonk("No Drive token. Run `sleuth drive setup` first.")
+
+
+@drive_app.command("setup")
+def drive_setup() -> None:
+    """Guided first-run setup for Google Drive sync.
+
+    Walks through the Google Cloud Console clicks, asks for the path to the
+    downloaded client_secret*.json, updates .env, then runs the device-flow
+    auth (URL + 8-char code + QR — scan on your phone, tap allow, done).
+    """
+    import webbrowser
+    from sleuth.setup_wizard import (
+        load_env_file, write_env_file, ENV_SECTIONS,
+    )
+    from sleuth.storage.gdrive import authorise_interactive, DriveNotConfigured
+
+    settings = get_settings()
+    console.print()
+    header("drive setup", "one-time, ~3 minutes")
+
+    console.print(Text(
+        "  Drive sync needs a tiny OAuth client tied to YOUR google account.\n"
+        "  the client_secret file stays local (gitignored). nothing of yours\n"
+        "  gets committed to this repo.\n",
+        style="muted",
+    ))
+
+    console.print(Text("  step 1: create the OAuth client", style="header"))
+    console.print(
+        "    a) open https://console.cloud.google.com/projectcreate\n"
+        "       and make a tiny new project (call it 'sleuth' or whatever).\n"
+        "    b) once that loads, open\n"
+        "       https://console.cloud.google.com/apis/library/drive.googleapis.com\n"
+        "       and click 'enable'.\n"
+        "    c) configure the consent screen at\n"
+        "       https://console.cloud.google.com/apis/credentials/consent\n"
+        "       choose 'external', user type, fill in the name + your email,\n"
+        "       add yourself as a test user, and save. (no need to publish.)\n"
+        "    d) then create the OAuth client at\n"
+        "       https://console.cloud.google.com/apis/credentials/oauthclient\n"
+        "       application type: 'TVs and Limited Input devices'\n"
+        "       name: 'sleuth on the pi' (or whatever)\n"
+        "       click create, then download the JSON file when offered.\n"
+    )
+
+    if typer.confirm("  open the project-create page in your browser now?", default=True):
+        webbrowser.open("https://console.cloud.google.com/projectcreate", new=2)
+
+    console.print()
+    console.print(Text("  step 2: point sleuth at the downloaded JSON", style="header"))
+    existing = load_env_file(settings.db_path.parent.parent / ".env")
+    default_path = existing.get("GDRIVE_CLIENT_SECRET_PATH", "")
+    while True:
+        path_str = typer.prompt(
+            "    path to client_secret*.json",
+            default=default_path or "",
+            show_default=bool(default_path),
+        ).strip()
+        if not path_str:
+            bonk("    need a path to continue. (ctrl-c to bail.)")
+            continue
+        path_str = str(Path(path_str).expanduser())
+        if not Path(path_str).exists():
+            bonk(f"    no file at {path_str}. try again.")
+            continue
+        break
+
+    folder_id = ""
+    if typer.confirm(
+        "  put created Docs inside a specific Drive folder? (else they go to My Drive root)",
+        default=False,
+    ):
+        folder_id = typer.prompt(
+            "    folder id (from the URL: drive.google.com/drive/folders/<this part>)",
+            default="", show_default=False,
+        ).strip()
+
+    # Persist to .env, preserving everything else
+    merged = dict(existing)
+    merged["GDRIVE_CLIENT_SECRET_PATH"] = path_str
+    if folder_id:
+        merged["GDRIVE_FOLDER_ID"] = folder_id
+    env_path = settings.db_path.parent.parent / ".env"
+    write_env_file(env_path, merged, sections=ENV_SECTIONS)
+    tick(f"saved path to {env_path}")
+
+    # Make sure the running process picks up the new env var.
+    import sleuth.config as cfg
+    cfg._settings = None
+
+    console.print()
+    console.print(Text("  step 3: authorise sleuth", style="header"))
+    console.print(Text(
+        "  follow the prompts below — scan the QR or visit the URL and enter the code.",
+        style="muted",
+    ))
+    console.print()
+
+    try:
+        authorise_interactive()
+    except DriveNotConfigured as e:
+        bonk(str(e))
+        raise typer.Exit(1)
+
+    console.print()
+    tick("drive setup complete. try `sleuth ask --drive \"...\"`.")
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ drive = [
   "google-auth>=2.30",
   "google-auth-oauthlib>=1.2",
   "google-api-python-client>=2.130",
+  "qrcode>=7.4",
 ]
 dev = [
   "pytest>=8.0",
