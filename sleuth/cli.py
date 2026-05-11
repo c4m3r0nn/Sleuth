@@ -346,6 +346,8 @@ def jobs_list() -> None:
 
 @jobs_app.command("show")
 def jobs_show(job_id: str) -> None:
+    from sleuth.scheduler.eta import format_next_run
+
     job = get_store().get_job(job_id)
     if not job:
         bonk(f"no job '{job_id}'.")
@@ -355,6 +357,7 @@ def jobs_show(job_id: str) -> None:
     fact("system", job.system or "-")
     fact("schedule", job.schedule_label or "-")
     fact("cron", job.cron_expr or "-")
+    fact("next run", format_next_run(job.cron_expr))
     fact("drive", "yes" if job.sync_drive else "no")
     fact("notify", "yes" if job.notify else "no")
 

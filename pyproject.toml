@@ -21,6 +21,7 @@ dependencies = [
   "anthropic>=0.34",
   "google-genai>=0.3",
   "python-crontab>=3.0",
+  "croniter>=2.0",
   "prompt-toolkit>=3.0",
 ]
 
