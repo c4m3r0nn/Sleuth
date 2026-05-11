@@ -586,6 +586,42 @@ def jobs_unschedule(job_id: str) -> None:
     tick(f"removed {n} cron entr{'y' if n == 1 else 'ies'}.")
 
 
+@jobs_app.command("reinstall")
+def jobs_reinstall() -> None:
+    """Rewrite all sleuth crontab entries using the current command format.
+
+    Use this after upgrading sleuth: existing entries that were installed
+    by an older version may use a command form that's vulnerable to CWD
+    package-shadowing under cron. This rebuilds every entry from the
+    cron_expr stored in the DB.
+    """
+    from sleuth.scheduler import install_cron, install_catchup_reboot
+
+    store = get_store()
+    scheduled = [j for j in store.list_jobs() if j.cron_expr]
+    if not scheduled:
+        console.print(Text("  no scheduled jobs to refresh.", style="muted"))
+    n_jobs = 0
+    for job in scheduled:
+        try:
+            install_cron(job.id, job.cron_expr)
+            n_jobs += 1
+            tick(f"refreshed {job.id} ({job.name})")
+        except Exception as e:  # noqa: BLE001
+            bonk(f"failed to refresh {job.id}: {e}")
+    # Also re-do the @reboot line.
+    try:
+        # Remove and reinstall so the command text is rewritten too.
+        from sleuth.scheduler import remove_catchup_reboot
+        remove_catchup_reboot()
+        install_catchup_reboot()
+        tick("refreshed @reboot catchup line.")
+    except Exception as e:  # noqa: BLE001
+        bonk(f"failed to refresh @reboot: {e}")
+
+    console.print(Text(f"  done. {n_jobs} job entr{'y' if n_jobs == 1 else 'ies'} rewritten.", style="muted"))
+
+
 @jobs_app.command("crontab")
 def jobs_crontab() -> None:
     """Show the cron entries sleuth has installed."""

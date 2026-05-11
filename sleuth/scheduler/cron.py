@@ -6,7 +6,7 @@ import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Optional  # noqa: F401  (used below)
 
 from sleuth.config import get_settings
 
@@ -126,16 +126,37 @@ def build_schedule(
     )
 
 
+def _venv_sleuth_path() -> Optional[Path]:
+    """Where the venv's installed `sleuth` console script lives, if any."""
+    bin_dir = Path(sys.executable).parent
+    candidate = bin_dir / "sleuth"
+    if candidate.exists() and candidate.is_file():
+        return candidate
+    return None
+
+
 def _command_for(job_id: str) -> str:
-    """The shell command crontab will run."""
+    """The shell command crontab will run.
+
+    Cron's CWD is the user's $HOME. If $HOME contains a directory named
+    `sleuth/` (which it will if the project lives there), then
+    `python -m sleuth` treats that directory as an implicit namespace package
+    and shadows the real installed `sleuth`. To dodge that:
+
+      - prefer the venv's `sleuth` console script (its own dir doesn't
+        shadow the package)
+      - fall back to `cd /tmp && python -m sleuth ...` if no script is
+        installed for some reason
+    """
     settings = get_settings()
     log_path = settings.log_dir / f"{job_id}.log"
+
+    binary = _venv_sleuth_path()
+    if binary is not None:
+        return f"{binary} _exec {job_id} >> {log_path} 2>&1"
+
     py = sys.executable
-    # Use module form so we don't depend on `sleuth` being on PATH inside cron.
-    return (
-        f"{py} -m sleuth _exec {job_id} "
-        f">> {log_path} 2>&1"
-    )
+    return f"cd /tmp && {py} -m sleuth _exec {job_id} >> {log_path} 2>&1"
 
 
 def install_cron(job_id: str, cron_expr: str) -> None:
@@ -171,10 +192,19 @@ def _remove_for(cron, job_id: str) -> int:
 
 
 def _catchup_command() -> str:
+    """The shell command the @reboot crontab entry will run.
+
+    Same CWD-shadowing concern as _command_for; same mitigation.
+    """
     settings = get_settings()
     log_path = settings.log_dir / "catchup.log"
+
+    binary = _venv_sleuth_path()
+    if binary is not None:
+        return f"{binary} catchup --auto >> {log_path} 2>&1"
+
     py = sys.executable
-    return f"{py} -m sleuth catchup --auto >> {log_path} 2>&1"
+    return f"cd /tmp && {py} -m sleuth catchup --auto >> {log_path} 2>&1"
 
 
 def install_catchup_reboot() -> bool:
