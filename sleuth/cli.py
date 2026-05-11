@@ -524,6 +524,82 @@ def jobs_crontab() -> None:
     console.print(table)
 
 
+@jobs_app.command("logs")
+def jobs_logs(
+    job_id: str,
+    lines: int = typer.Option(40, "--lines", "-n", help="How many trailing lines to show."),
+) -> None:
+    """Show recent log output from a scheduled job's runs."""
+    settings = get_settings()
+    log_path = settings.log_dir / f"{job_id}.log"
+    if not log_path.exists():
+        bonk(f"no log file at {log_path}.")
+        console.print(Text(
+            "  the cron job probably hasn't fired yet (or cron didn't run it).\n"
+            "  try `sleuth jobs check " + job_id + "` for diagnostics.",
+            style="muted",
+        ))
+        raise typer.Exit(1)
+    content = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    tail = content[-lines:] if len(content) > lines else content
+    header(f"logs: {job_id}", str(log_path))
+    if not tail:
+        console.print(Text("  (file exists but is empty)", style="muted"))
+        return
+    for line in tail:
+        console.print(Text(f"  {line}", style="paper"))
+
+
+@jobs_app.command("check")
+def jobs_check(job_id: str) -> None:
+    """Diagnose a scheduled job: show cron entry, log file status, env sanity."""
+    import os
+    import platform
+    import subprocess
+
+    from sleuth.scheduler import list_cron
+
+    settings = get_settings()
+    job = get_store().get_job(job_id)
+    if not job:
+        bonk(f"no job '{job_id}'.")
+        raise typer.Exit(1)
+
+    header(f"check: {job.name}", job_id)
+    fact("schedule", job.schedule_label or "(not scheduled)")
+    fact("cron expr", job.cron_expr or "-")
+    log_path = settings.log_dir / f"{job_id}.log"
+    fact("log path", str(log_path))
+
+    entries = {jid: (expr, cmd) for jid, expr, cmd in list_cron()}
+    if job_id in entries:
+        tick("crontab entry present.")
+        expr, cmd = entries[job_id]
+        console.print(Text(f"  cron: {expr}", style="muted"))
+        console.print(Text(f"  cmd:  {cmd}", style="muted"))
+    else:
+        bonk("no crontab entry. run `jobs schedule` to install one.")
+
+    if log_path.exists():
+        size = log_path.stat().st_size
+        if size == 0:
+            console.print(Text("  log file exists but is empty (cron may not have fired yet)", style="warn"))
+        else:
+            tick(f"log file: {size} bytes. tail with `sleuth jobs logs {job_id}`.")
+    else:
+        console.print(Text("  log file does not exist yet (cron has never run this job)", style="warn"))
+
+    if platform.system() == "Darwin":
+        console.print()
+        console.print(Text(
+            "  macOS gotcha: cron requires Full Disk Access. open System Settings\n"
+            "  -> Privacy & Security -> Full Disk Access, click +, navigate to\n"
+            "  /usr/sbin/cron (cmd+shift+G to type it), and tick the box.\n"
+            "  no FDA = cron entries silently never run.",
+            style="warn",
+        ))
+
+
 # --------------------------------------------------------------------------- #
 # drive subcommands
 # --------------------------------------------------------------------------- #

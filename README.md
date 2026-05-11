@@ -41,6 +41,49 @@ sleuth ask "what happened in AI this week?"
 
 On a Raspberry Pi 5, install the same way (no system packages required).
 
+## Install globally (so `sleuth` works from any directory)
+
+### Option A: pipx (recommended)
+
+`pipx` installs each tool in its own isolated venv and puts a shim on your
+`$PATH` so you can run `sleuth` from anywhere.
+
+```bash
+# macOS
+brew install pipx
+pipx ensurepath
+
+# Raspberry Pi (Debian/Ubuntu)
+sudo apt install pipx
+pipx ensurepath
+
+# then, from the project dir:
+pipx install -e .
+```
+
+Reopen your shell. `sleuth` should now work from any directory. To upgrade
+later: `git pull && pipx reinstall sleuth-cli`.
+
+### Option B: drop a symlink on PATH (works on a fresh Pi, no extra tools)
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf "$PWD/.venv/bin/sleuth" ~/.local/bin/sleuth
+# make sure ~/.local/bin is on PATH (usually is on Pi OS / modern macOS)
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc   # or ~/.zshrc
+exec $SHELL -l
+```
+
+The symlink keeps editable installs working: `git pull` is enough to update
+the code, no reinstall step needed.
+
+### Verify
+
+```bash
+which sleuth     # should print the path on PATH
+sleuth --version
+```
+
 ## Interactive shell
 
 Type `sleuth` with no arguments and you drop into a session with history,
@@ -107,6 +150,8 @@ Ctrl-D or `exit`/`quit`/`q` leaves. Up/down browses history (saved at
 | `sleuth jobs schedule <id> --daily 09:00` | Hand the job to system cron. |
 | `sleuth jobs unschedule <id>` | Take it back off cron. |
 | `sleuth jobs crontab` | Show the cron entries sleuth installed. |
+| `sleuth jobs logs <id>` | Tail the log file for a scheduled job. |
+| `sleuth jobs check <id>` | Diagnose a scheduled job (cron entry, log status, OS-specific gotchas). |
 | `sleuth jobs rm <id>` | Delete the job. |
 | `sleuth history` | See past runs. |
 | `sleuth show <run_id>` | Dump a past run's full output. |
@@ -138,6 +183,44 @@ so `sleuth jobs unschedule` can find it again.
 - **Google**: New `google-genai` SDK with `google_search` grounding. Most 3.x
   text models still carry a `-preview` suffix; `gemini-3.1-flash-lite` is
   the only fully stable tier.
+
+## Scheduled jobs and cron troubleshooting
+
+When you run `sleuth jobs schedule <id> --daily 09:00` (or whatever),
+sleuth writes one line to your user crontab. At the scheduled time, cron
+runs the equivalent of `python -m sleuth _exec <id>` and writes everything
+to `logs/<id>.log`.
+
+If a scheduled job seems not to fire, in this order:
+
+1. `sleuth jobs check <id>` - shows the cron entry, log status, and the
+   macOS gotcha if applicable.
+2. `sleuth jobs logs <id>` - tails the log file. If it doesn't exist
+   yet, cron has never actually run the entry.
+3. `crontab -l | grep sleuth` - confirms the entry is installed.
+4. `sleuth jobs run <id>` - runs the job once, immediately, without cron.
+   If this works but the scheduled one doesn't, the problem is cron, not
+   sleuth.
+
+### The macOS gotcha
+
+On macOS, the `cron` daemon needs **Full Disk Access** to run anything in
+your home directory. Without it, cron silently does nothing - no errors,
+no log lines, just nothing.
+
+Open System Settings -> Privacy & Security -> Full Disk Access -> `+` ->
+press cmd+shift+G and type `/usr/sbin/cron`. Tick the box, restart your
+mac (yes really), then try again.
+
+On Raspberry Pi this isn't a thing - cron just works.
+
+### Verify on a Pi
+
+```bash
+systemctl status cron     # should be active (running)
+crontab -l                # should show the sleuth entries
+sleuth jobs check <id>
+```
 
 ## Notifications
 

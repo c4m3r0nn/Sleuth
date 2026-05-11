@@ -202,3 +202,21 @@ class TestNeedsWalkthrough:
         from sleuth.walkthrough import needs_walkthrough
         assert needs_walkthrough(["models"]) is None
         assert needs_walkthrough([]) is None
+
+    def test_bare_jobs_opens_menu(self):
+        from sleuth.walkthrough import needs_walkthrough
+        # Bare `jobs` should walk - we render a menu of subcommands rather
+        # than typer's bare usage error.
+        assert needs_walkthrough(["jobs"]) == "jobs menu"
+
+    def test_bare_drive_opens_menu(self):
+        from sleuth.walkthrough import needs_walkthrough
+        assert needs_walkthrough(["drive"]) == "drive menu"
+
+    def test_bare_jobs_logs_walks(self):
+        from sleuth.walkthrough import needs_walkthrough
+        assert needs_walkthrough(["jobs", "logs"]) == "jobs logs"
+
+    def test_bare_jobs_check_walks(self):
+        from sleuth.walkthrough import needs_walkthrough
+        assert needs_walkthrough(["jobs", "check"]) == "jobs check"

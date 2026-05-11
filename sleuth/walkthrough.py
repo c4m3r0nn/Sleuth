@@ -188,14 +188,19 @@ def build_history_argv(*, limit: Optional[int] = None, job_id: Optional[str] = N
 
 _WALKABLE: dict[tuple[str, ...], str] = {
     ("ask",): "ask",
+    ("jobs",): "jobs menu",
     ("jobs", "new"): "jobs new",
     ("jobs", "schedule"): "jobs schedule",
     ("jobs", "edit"): "jobs edit",
     ("jobs", "run"): "jobs run",
     ("jobs", "show"): "jobs show",
     ("jobs", "rm"): "jobs rm",
+    ("jobs", "logs"): "jobs logs",
+    ("jobs", "check"): "jobs check",
+    ("jobs", "unschedule"): "jobs unschedule",
     ("show",): "show",
     ("history",): "history",
+    ("drive",): "drive menu",
 }
 
 
@@ -227,15 +232,17 @@ def _ask_text(question: str, default: str = "") -> str:
 
 
 def _ask_yesno(question: str, *, default: bool = False) -> bool:
-    from prompt_toolkit import prompt as pt_prompt
-    from prompt_toolkit.formatted_text import FormattedText
+    """Yes/no rendered as a two-option arrow-key selector."""
+    from sleuth.ui.selector import run_select_one
 
-    suffix = "[Y/n]" if default else "[y/N]"
-    label = FormattedText([("class:wkq", f"  {question} {suffix} "), ("", "")])
-    raw = pt_prompt(label).strip().lower()
-    if not raw:
+    yes_label, no_label = "yes", "no"
+    options = [yes_label, no_label]
+    chosen = run_select_one(
+        question, options, default=yes_label if default else no_label,
+    )
+    if chosen is None:
         return default
-    return raw[0] == "y"
+    return chosen == yes_label
 
 
 def _ask_choice(
@@ -243,40 +250,23 @@ def _ask_choice(
     options: list[str],
     *,
     default: Optional[str] = None,
-    allow_freeform: bool = True,
     show_blurbs: Optional[list[str]] = None,
-) -> str:
-    """Print a numbered list and accept either a number or the typed value."""
-    from prompt_toolkit import prompt as pt_prompt
-    from sleuth.ui import console
+    allow_freeform: bool = False,  # kept for back-compat; ignored
+) -> Optional[str]:
+    """Arrow-key single-select. Returns the chosen option or None if cancelled."""
+    from sleuth.ui.selector import run_select_one
+    return run_select_one(question, options, default=default, blurbs=show_blurbs)
 
-    console.print(f"  {question}")
-    for i, opt in enumerate(options, 1):
-        marker = " <-" if opt == default else "   "
-        blurb = ""
-        if show_blurbs and i - 1 < len(show_blurbs):
-            blurb = f"  {show_blurbs[i - 1]}"
-        console.print(f"    {marker} [{i}] {opt}{blurb}")
 
-    default_token = ""
-    if default:
-        try:
-            default_token = str(options.index(default) + 1)
-        except ValueError:
-            default_token = default
-
-    raw = pt_prompt("    > ", default=default_token).strip()
-    if not raw and default:
-        return default
-    if raw.isdigit():
-        idx = int(raw) - 1
-        if 0 <= idx < len(options):
-            return options[idx]
-    if allow_freeform:
-        return raw
-    if default:
-        return default
-    return options[0]
+def _ask_multi(
+    question: str,
+    options: list[str],
+    *,
+    default_selected: Optional[list[str]] = None,
+) -> Optional[list[str]]:
+    """Arrow-key multi-select with checkboxes."""
+    from sleuth.ui.selector import run_select_many
+    return run_select_many(question, options, default_selected=default_selected)
 
 
 def walk_ask() -> Optional[list[str]]:
@@ -354,27 +344,24 @@ def walk_jobs_new() -> Optional[list[str]]:
 
 def walk_jobs_schedule(job_id: Optional[str] = None) -> Optional[list[str]]:
     if not job_id:
-        # let them pick an id from the saved jobs
-        from sleuth.storage import get_store
-        rows = get_store().list_jobs()
-        if not rows:
-            from sleuth.ui.console import bonk
-            bonk("no saved jobs to schedule. run `jobs new` first.")
+        job_id = _pick_job_id("which job to schedule?")
+        if not job_id:
             return None
-        ids = [j.id for j in rows]
-        labels = [f"{j.name} ({j.id})" for j in rows]
-        # Use ask_choice on labels but return id
-        pick = _ask_choice("which job?", labels, default=labels[0], allow_freeform=False)
-        job_id = ids[labels.index(pick)] if pick in labels else ids[0]
 
     kinds = ["daily", "weekly", "hourly", "every (interval)", "monthly", "raw cron"]
-    kind = _ask_choice("schedule kind?", kinds, default="daily", allow_freeform=False)
+    kind = _ask_choice("schedule kind?", kinds, default="daily")
+    if not kind:
+        return None
 
     if kind == "daily":
         at = _ask_text("time (HH:MM, 24h)", default="09:00")
         return build_jobs_schedule_argv(job_id, daily=at)
     if kind == "weekly":
-        days = _ask_text("days (e.g. mon,wed,fri)", default="mon,wed,fri")
+        day_names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        chosen_days = _ask_multi("which days?", day_names, default_selected=["mon"])
+        if not chosen_days:
+            return None
+        days = ",".join(chosen_days)
         at = _ask_text("time (HH:MM, 24h)", default="09:00")
         return build_jobs_schedule_argv(job_id, weekly=days, at=at)
     if kind == "hourly":
@@ -405,7 +392,9 @@ def _pick_job_id(prompt_question: str = "which job?") -> Optional[str]:
         return None
     ids = [j.id for j in rows]
     labels = [f"{j.name} ({j.id})" for j in rows]
-    pick = _ask_choice(prompt_question, labels, default=labels[0], allow_freeform=False)
+    pick = _ask_choice(prompt_question, labels, default=labels[0])
+    if pick is None:
+        return None
     return ids[labels.index(pick)] if pick in labels else ids[0]
 
 
@@ -431,27 +420,51 @@ def walk_jobs_rm() -> Optional[list[str]]:
 
 
 def walk_jobs_edit() -> Optional[list[str]]:
+    """Pick a job, then check which fields you want to change, then change them."""
     job_id = _pick_job_id("which job to edit?")
     if not job_id:
         return None
 
+    field_choices = [
+        "prompt",
+        "model",
+        "drive sync",
+        "notifications",
+        "rename (job name)",
+    ]
+    picked = _ask_multi("which fields to change?", field_choices)
+    if picked is None:
+        return None
+    if not picked:
+        from sleuth.ui.console import bonk
+        bonk("nothing to change.")
+        return None
+
     fields: dict = {}
-    if _ask_yesno("change the prompt?", default=False):
+    if "prompt" in picked:
         fields["prompt"] = _ask_text("new prompt")
-    if _ask_yesno("change the model?", default=False):
+    if "model" in picked:
         from sleuth.config import get_settings
         from sleuth.providers import MODEL_CATALOG, PROVIDERS
+
         provider = _ask_choice(
-            "provider?", list(PROVIDERS.keys()), default=get_settings().default_provider
+            "provider?", list(PROVIDERS.keys()),
+            default=get_settings().default_provider,
         )
-        options = [m for m, _ in MODEL_CATALOG.get(provider, [])]
-        fields["provider"] = provider
-        fields["model"] = _ask_choice("model?", options, default=options[0])
-    if _ask_yesno("toggle drive sync?", default=False):
+        if provider:
+            options = [m for m, _ in MODEL_CATALOG.get(provider, [])]
+            blurbs = [b for _, b in MODEL_CATALOG.get(provider, [])]
+            fields["provider"] = provider
+            model = _ask_choice(
+                "model?", options, default=options[0], show_blurbs=blurbs,
+            )
+            if model:
+                fields["model"] = model
+    if "drive sync" in picked:
         fields["drive"] = _ask_yesno("turn drive sync ON?", default=False)
-    if _ask_yesno("toggle notifications?", default=False):
+    if "notifications" in picked:
         fields["notify"] = _ask_yesno("turn notifications ON?", default=True)
-    if _ask_yesno("rename the job?", default=False):
+    if "rename (job name)" in picked:
         fields["name"] = _ask_text("new name")
 
     if not fields:
@@ -475,7 +488,9 @@ def walk_show() -> Optional[list[str]]:
         f"{r.id}  {r.started_at[:16].replace('T', ' ')}  {r.provider}/{r.model}  {(r.prompt or '')[:40]}"
         for r in runs
     ]
-    pick = _ask_choice("which run?", labels, default=labels[0], allow_freeform=False)
+    pick = _ask_choice("which run?", labels, default=labels[0])
+    if pick is None:
+        return None
     run_id = ids[labels.index(pick)] if pick in labels else ids[0]
     return build_show_argv(run_id)
 
@@ -489,14 +504,80 @@ def walk_history() -> Optional[list[str]]:
     return build_history_argv(limit=limit)
 
 
+def walk_jobs_menu() -> Optional[list[str]]:
+    """Top-level `jobs` menu when typed bare. Pick a subcommand by arrow keys."""
+    actions = [
+        "list",
+        "new",
+        "show",
+        "edit",
+        "run",
+        "schedule",
+        "unschedule",
+        "logs",
+        "check",
+        "rm",
+        "crontab",
+    ]
+    pick = _ask_choice("which jobs action?", actions, default="list")
+    if not pick:
+        return None
+    # Most need an id; pass through to the nested walkthrough or to typer.
+    if pick == "list":
+        return ["jobs", "list"]
+    if pick == "crontab":
+        return ["jobs", "crontab"]
+    if pick == "new":
+        return walk_jobs_new()
+    if pick == "show":
+        return walk_jobs_show()
+    if pick == "edit":
+        return walk_jobs_edit()
+    if pick == "run":
+        return walk_jobs_run()
+    if pick == "schedule":
+        return walk_jobs_schedule()
+    if pick == "rm":
+        return walk_jobs_rm()
+    if pick == "logs":
+        jid = _pick_job_id("which job's logs?")
+        return ["jobs", "logs", jid] if jid else None
+    if pick == "check":
+        jid = _pick_job_id("which job to check?")
+        return ["jobs", "check", jid] if jid else None
+    if pick == "unschedule":
+        jid = _pick_job_id("which job to unschedule?")
+        return ["jobs", "unschedule", jid] if jid else None
+    return None
+
+
+def walk_drive_menu() -> Optional[list[str]]:
+    """Top-level `drive` menu when typed bare."""
+    pick = _ask_choice("which drive action?", ["status", "auth"], default="status")
+    if not pick:
+        return None
+    return ["drive", pick]
+
+
 WALK_DISPATCH = {
     "ask": walk_ask,
+    "jobs menu": walk_jobs_menu,
     "jobs new": walk_jobs_new,
     "jobs schedule": walk_jobs_schedule,
     "jobs edit": walk_jobs_edit,
     "jobs run": walk_jobs_run,
     "jobs show": walk_jobs_show,
     "jobs rm": walk_jobs_rm,
+    "jobs logs": lambda: (lambda jid: ["jobs", "logs", jid] if jid else None)(
+        _pick_job_id("which job's logs?")
+    ),
+    "jobs check": lambda: (lambda jid: ["jobs", "check", jid] if jid else None)(
+        _pick_job_id("which job to check?")
+    ),
+    "jobs unschedule": lambda: (lambda jid: ["jobs", "unschedule", jid] if jid else None)(
+        _pick_job_id("which job to unschedule?")
+    ),
     "show": walk_show,
     "history": walk_history,
+    "drive menu": walk_drive_menu,
 }
