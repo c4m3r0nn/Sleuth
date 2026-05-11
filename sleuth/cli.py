@@ -243,6 +243,74 @@ def ping() -> None:
         raise typer.Exit(1)
 
 
+@app.command()
+def catchup(
+    install: bool = typer.Option(False, "--install", help="Also install the @reboot crontab entry."),
+    uninstall: bool = typer.Option(False, "--uninstall", help="Remove the @reboot crontab entry."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="List missed jobs without running them."),
+    auto: bool = typer.Option(False, "--auto", hidden=True, help="Used by the @reboot cron entry; suppresses 'nothing to do' output."),
+) -> None:
+    """Run any scheduled jobs whose most-recent fire was missed.
+
+    Installed automatically as a @reboot crontab entry by `jobs schedule`,
+    so jobs you missed while the Pi was off get caught up the moment the
+    machine comes back. Safe to run manually at any time.
+    """
+    from sleuth.scheduler import (
+        install_catchup_reboot,
+        remove_catchup_reboot,
+        has_catchup_reboot,
+    )
+    from sleuth.scheduler.catchup import find_missed_jobs
+    from sleuth.workflows import run_research
+
+    if uninstall:
+        n = remove_catchup_reboot()
+        tick(f"removed {n} @reboot catchup entr{'y' if n == 1 else 'ies'}.")
+        return
+
+    if install:
+        added = install_catchup_reboot()
+        if added:
+            tick("installed @reboot catchup line in your crontab.")
+        else:
+            console.print(Text("  @reboot catchup already installed.", style="muted"))
+
+    store = get_store()
+    missed = find_missed_jobs(store)
+    if not missed:
+        if not auto:
+            tick("nothing to catch up on.")
+        return
+
+    header("catching up", f"{len(missed)} job{'s' if len(missed) != 1 else ''} missed a fire")
+    for job in missed:
+        console.print(Text(f"  - {job.name} ({job.id})", style="paper"))
+
+    if dry_run:
+        console.print(Text("  --dry-run set; not running.", style="muted"))
+        return
+
+    for job in missed:
+        try:
+            run_research(
+                prompt=job.prompt,
+                provider_name=job.provider,
+                model=job.model,
+                system=job.system,
+                max_tokens=job.max_tokens,
+                temperature=job.temperature,
+                web_search=job.web_search,
+                job=job,
+                sync_drive=job.sync_drive,
+                notify=job.notify,
+                quiet=auto,
+                write_file=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            bonk(f"catch-up failed for {job.id}: {type(e).__name__}: {e}")
+
+
 @app.command(name="_exec", hidden=True)
 def _exec(job_id: str) -> None:
     """Internal: run a saved job. Crontab calls this."""
@@ -496,6 +564,14 @@ def jobs_schedule(
     get_store().update_job_schedule(job_id, spec.label, spec.cron_expr)
     tick(f"scheduled {job_id}: {spec.label}")
     console.print(Text(f"  cron: {spec.cron_expr}", style="muted"))
+
+    # Also wire @reboot catchup so missed fires get run when the box comes back.
+    from sleuth.scheduler import install_catchup_reboot
+    try:
+        if install_catchup_reboot():
+            tick("installed @reboot catchup (handles missed fires after power loss / reboots).")
+    except Exception as e:
+        console.print(Text(f"  (couldn't install @reboot catchup: {e})", style="muted"))
 
 
 @jobs_app.command("unschedule")

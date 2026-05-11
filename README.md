@@ -222,6 +222,31 @@ crontab -l                # should show the sleuth entries
 sleuth jobs check <id>
 ```
 
+### Catching up after the Pi was off
+
+Vanilla cron does not run a missed entry when a powered-off machine comes
+back. sleuth handles this with a `@reboot` crontab line that runs
+`sleuth catchup` — which checks every scheduled job and runs any whose
+most-recent fire didn't actually happen.
+
+`sleuth jobs schedule` installs that `@reboot` line automatically. If you
+scheduled jobs on an older version, install it manually once:
+
+```bash
+sleuth catchup --install
+crontab -l | grep sleuth-catchup    # confirms the @reboot line is present
+```
+
+You can also run catch-up by hand any time:
+
+```bash
+sleuth catchup            # run missed jobs now
+sleuth catchup --dry-run  # just list what would run
+```
+
+Catch-up runs each missed job **once**, not once per missed slot — fresh
+research beats five stale snapshots.
+
 ## Notifications
 
 sleuth can ping you on **Telegram**, **Discord**, or both when scheduled jobs

@@ -12,6 +12,7 @@ from sleuth.config import get_settings
 
 
 SCHEDULE_TAG = "sleuth"  # entries are tagged "# sleuth:<job_id>"
+CATCHUP_COMMENT = "sleuth-catchup"  # the @reboot catchup line
 
 
 DAY_MAP = {
@@ -167,6 +168,50 @@ def _remove_for(cron, job_id: str) -> int:
     for m in matches:
         cron.remove(m)
     return len(matches)
+
+
+def _catchup_command() -> str:
+    settings = get_settings()
+    log_path = settings.log_dir / "catchup.log"
+    py = sys.executable
+    return f"{py} -m sleuth catchup --auto >> {log_path} 2>&1"
+
+
+def install_catchup_reboot() -> bool:
+    """Ensure a `@reboot sleuth catchup` line exists in the crontab.
+
+    Idempotent: returns True if a new line was installed, False if one
+    was already there.
+    """
+    from crontab import CronTab
+
+    cron = CronTab(user=True)
+    for entry in cron:
+        if (entry.comment or "") == CATCHUP_COMMENT:
+            return False
+    job = cron.new(command=_catchup_command(), comment=CATCHUP_COMMENT)
+    job.every_reboot()
+    cron.write()
+    return True
+
+
+def remove_catchup_reboot() -> int:
+    """Remove any @reboot catchup line. Returns the number removed."""
+    from crontab import CronTab
+
+    cron = CronTab(user=True)
+    matches = list(cron.find_comment(CATCHUP_COMMENT))
+    for m in matches:
+        cron.remove(m)
+    cron.write()
+    return len(matches)
+
+
+def has_catchup_reboot() -> bool:
+    from crontab import CronTab
+
+    cron = CronTab(user=True)
+    return any((e.comment or "") == CATCHUP_COMMENT for e in cron)
 
 
 def list_cron() -> list[tuple[str, str, str]]:

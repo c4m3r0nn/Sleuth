@@ -3,7 +3,11 @@ from sleuth.scheduler.cron import (
     install_cron,
     remove_cron,
     list_cron,
+    install_catchup_reboot,
+    remove_catchup_reboot,
+    has_catchup_reboot,
     SCHEDULE_TAG,
+    CATCHUP_COMMENT,
     ScheduleSpec,
 )
 
@@ -12,6 +16,10 @@ __all__ = [
     "install_cron",
     "remove_cron",
     "list_cron",
+    "install_catchup_reboot",
+    "remove_catchup_reboot",
+    "has_catchup_reboot",
     "SCHEDULE_TAG",
+    "CATCHUP_COMMENT",
     "ScheduleSpec",
 ]
