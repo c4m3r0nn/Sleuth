@@ -246,19 +246,14 @@ def run_research(
 
     if notify:
         try:
-            from sleuth.notify import notify_all
-            summary = (result.text or "").strip().split("\n", 1)[0][:400]
-            msg_lines = [
-                f"*sleuth* {verb_dict.pick('done').lower()} - `{provider_name}/{model}`",
-                "",
-                f"_{prompt[:200]}_",
-                "",
-                summary,
-            ]
-            if gdrive_url:
-                msg_lines.append("")
-                msg_lines.append(f"[doc]({gdrive_url})")
-            delivered = notify_all("\n".join(msg_lines))
+            from sleuth.notify import notify_run_finished
+            delivered = notify_run_finished(
+                provider=provider_name,
+                model=model,
+                prompt=prompt,
+                body=(result.text or "").strip(),
+                gdrive_url=gdrive_url,
+            )
             if delivered and not quiet:
                 tick(f"{verb_dict.pick('ping')} via {', '.join(delivered)}.")
         except Exception as e:  # noqa: BLE001
