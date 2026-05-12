@@ -165,8 +165,13 @@ Ctrl-D or `exit`/`quit`/`q` leaves. Up/down browses history (saved at
 
 ## Schedule grammar
 
+All times you give to `jobs schedule` are interpreted in **your system's
+local timezone** — same as the cron daemon. `sleuth jobs show` then
+displays the resolved next-fire time in **UTC** so there's no confusion
+between "what time you set" and "what time it actually fires globally".
+
 ```bash
-sleuth jobs schedule abc123 --daily 09:00
+sleuth jobs schedule abc123 --daily 09:00            # 09:00 LOCAL time
 sleuth jobs schedule abc123 --weekly mon,wed,fri --at 18:30
 sleuth jobs schedule abc123 --hourly
 sleuth jobs schedule abc123 --every 15m
@@ -174,8 +179,16 @@ sleuth jobs schedule abc123 --monthly --day 1 --at 06:00
 sleuth jobs schedule abc123 --cron "*/30 9-17 * * 1-5"   # raw escape hatch
 ```
 
-Behind the scenes each schedule becomes one entry in your user crontab, tagged
-so `sleuth jobs unschedule` can find it again.
+After scheduling you'll see something like:
+
+```
++ scheduled abc123: weekly mon at 09:00 local time
+  cron: 0 9 * * 1   (interpreted in Europe/London (BST, UTC+01:00))
+  next run: 2026-05-18 08:00:00 UTC  (in 5d 15h)
+```
+
+Behind the scenes each schedule becomes one entry in your user crontab,
+tagged so `sleuth jobs unschedule` can find it again.
 
 ## Provider notes (May 2026)
 

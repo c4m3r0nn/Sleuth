@@ -414,7 +414,7 @@ def jobs_list() -> None:
 
 @jobs_app.command("show")
 def jobs_show(job_id: str) -> None:
-    from sleuth.scheduler.eta import format_next_run
+    from sleuth.scheduler.eta import format_next_run, describe_local_tz
 
     job = get_store().get_job(job_id)
     if not job:
@@ -424,7 +424,10 @@ def jobs_show(job_id: str) -> None:
     fact("prompt", job.prompt)
     fact("system", job.system or "-")
     fact("schedule", job.schedule_label or "-")
-    fact("cron", job.cron_expr or "-")
+    if job.cron_expr:
+        fact("cron (local)", f"{job.cron_expr}  (interpreted in {describe_local_tz()})")
+    else:
+        fact("cron", "-")
     fact("next run", format_next_run(job.cron_expr))
     fact("drive", "yes" if job.sync_drive else "no")
     fact("notify", "yes" if job.notify else "no")
@@ -523,16 +526,21 @@ def jobs_run(
 @jobs_app.command("schedule")
 def jobs_schedule(
     job_id: str,
-    daily: Optional[str] = typer.Option(None, "--daily", help="HH:MM, e.g. 09:00"),
+    daily: Optional[str] = typer.Option(None, "--daily", help="HH:MM in LOCAL time, e.g. 09:00"),
     weekly: Optional[str] = typer.Option(None, "--weekly", help="Comma days, e.g. mon,wed,fri"),
-    at: Optional[str] = typer.Option(None, "--at", help="HH:MM (used with --weekly/--monthly)"),
+    at: Optional[str] = typer.Option(None, "--at", help="HH:MM in LOCAL time (used with --weekly/--monthly)"),
     hourly: bool = typer.Option(False, "--hourly"),
     every: Optional[str] = typer.Option(None, "--every", help="e.g. 15m, 2h"),
     monthly: bool = typer.Option(False, "--monthly"),
     day: Optional[int] = typer.Option(None, "--day", help="Day of month for --monthly (1..28)"),
-    cron: Optional[str] = typer.Option(None, "--cron", help="Raw 5-field cron expression."),
+    cron: Optional[str] = typer.Option(None, "--cron", help="Raw 5-field cron expression (interpreted in LOCAL time)."),
 ) -> None:
-    """Hand a job to system cron."""
+    """Hand a job to system cron.
+
+    All times are interpreted in the system's local timezone — that's what
+    the cron daemon itself does. `sleuth jobs show` displays the resolved
+    next-fire time in UTC so there's no ambiguity.
+    """
     from sleuth.scheduler import build_schedule, install_cron
 
     job = get_store().get_job(job_id)
@@ -563,7 +571,13 @@ def jobs_schedule(
 
     get_store().update_job_schedule(job_id, spec.label, spec.cron_expr)
     tick(f"scheduled {job_id}: {spec.label}")
-    console.print(Text(f"  cron: {spec.cron_expr}", style="muted"))
+
+    from sleuth.scheduler.eta import describe_local_tz, format_next_run
+    console.print(Text(
+        f"  cron: {spec.cron_expr}   (interpreted in {describe_local_tz()})",
+        style="muted",
+    ))
+    console.print(Text(f"  next run: {format_next_run(spec.cron_expr)}", style="muted"))
 
     # Also wire @reboot catchup so missed fires get run when the box comes back.
     from sleuth.scheduler import install_catchup_reboot

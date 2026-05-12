@@ -353,8 +353,13 @@ def walk_jobs_schedule(job_id: Optional[str] = None) -> Optional[list[str]]:
     if not kind:
         return None
 
+    # Show the local tz so users know what 09:00 actually means.
+    from sleuth.scheduler.eta import describe_local_tz
+    from sleuth.ui import console
+    console.print(f"  (times are interpreted in your system local timezone: {describe_local_tz()})")
+
     if kind == "daily":
-        at = _ask_text("time (HH:MM, 24h)", default="09:00")
+        at = _ask_text("time (HH:MM, 24h, local time)", default="09:00")
         return build_jobs_schedule_argv(job_id, daily=at)
     if kind == "weekly":
         day_names = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
@@ -362,7 +367,7 @@ def walk_jobs_schedule(job_id: Optional[str] = None) -> Optional[list[str]]:
         if not chosen_days:
             return None
         days = ",".join(chosen_days)
-        at = _ask_text("time (HH:MM, 24h)", default="09:00")
+        at = _ask_text("time (HH:MM, 24h, local time)", default="09:00")
         return build_jobs_schedule_argv(job_id, weekly=days, at=at)
     if kind == "hourly":
         return build_jobs_schedule_argv(job_id, hourly=True)
@@ -375,10 +380,10 @@ def walk_jobs_schedule(job_id: Optional[str] = None) -> Optional[list[str]]:
             day = int(day_str)
         except ValueError:
             day = 1
-        at = _ask_text("time (HH:MM, 24h)", default="09:00")
+        at = _ask_text("time (HH:MM, 24h, local time)", default="09:00")
         return build_jobs_schedule_argv(job_id, monthly=True, day=day, at=at)
     # raw cron
-    expr = _ask_text("cron expression (5 fields)", default="0 9 * * *")
+    expr = _ask_text("cron expression (5 fields, interpreted in local time)", default="0 9 * * *")
     return build_jobs_schedule_argv(job_id, cron=expr)
 
 

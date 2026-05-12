@@ -15,6 +15,42 @@ def _resolve_tz(tz: Optional[str]) -> ZoneInfo | timezone:
     return ZoneInfo(tz)
 
 
+def describe_local_tz(
+    *, tz: Optional[str] = None, now: Optional[datetime] = None,
+) -> str:
+    """Return a short human description of the system local timezone.
+
+    Examples: ``BST (UTC+01:00)``, ``EST (UTC-05:00)``, ``UTC (UTC+00:00)``.
+    Includes the IANA name when we can extract it (passed `tz` or
+    ``str()`` on the zoneinfo).
+    """
+    local_tz = _resolve_tz(tz)
+    if now is None:
+        now = datetime.now(timezone.utc)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    localised = now.astimezone(local_tz)
+
+    abbr = localised.strftime("%Z") or ""
+    offset = localised.strftime("%z")  # e.g. '+0100' or '+0000'
+    # canonical "+HH:MM"
+    if offset and len(offset) == 5:
+        offset = f"{offset[:3]}:{offset[3:]}"
+
+    iana = ""
+    if isinstance(local_tz, ZoneInfo):
+        iana = str(local_tz)
+
+    # Build something compact: prefer "IANA (ABBR, UTC±HH:MM)" when we have iana.
+    if iana and iana != "UTC":
+        if abbr and abbr != iana:
+            return f"{iana} ({abbr}, UTC{offset})"
+        return f"{iana} (UTC{offset})"
+    if abbr:
+        return f"{abbr} (UTC{offset})"
+    return f"UTC{offset}"
+
+
 def next_run_utc(
     cron_expr: Optional[str],
     *,

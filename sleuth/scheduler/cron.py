@@ -85,7 +85,7 @@ def build_schedule(
         h, mi = _parse_hhmm(daily)
         return ScheduleSpec(
             cron_expr=f"{mi} {h} * * *",
-            label=f"daily at {h:02d}:{mi:02d}",
+            label=f"daily at {h:02d}:{mi:02d} local time",
         )
 
     if weekly_days:
@@ -99,7 +99,7 @@ def build_schedule(
         )
         return ScheduleSpec(
             cron_expr=f"{mi} {h} * * {days_str}",
-            label=f"weekly {names} at {h:02d}:{mi:02d}",
+            label=f"weekly {names} at {h:02d}:{mi:02d} local time",
         )
 
     if hourly:
@@ -117,7 +117,7 @@ def build_schedule(
         h, mi = _parse_hhmm(monthly_at)
         return ScheduleSpec(
             cron_expr=f"{mi} {h} {monthly_day} * *",
-            label=f"monthly day {monthly_day} at {h:02d}:{mi:02d}",
+            label=f"monthly day {monthly_day} at {h:02d}:{mi:02d} local time",
         )
 
     raise ValueError(
