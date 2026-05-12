@@ -5,10 +5,12 @@ web, files everything in a tidy SQLite drawer, and (optionally) pings your
 phone when overnight jobs wrap. Built to live happily on a Raspberry Pi.
 
 ```
-   .--.    .  .  ___ . . _____ . .
-  /    \   |  | /__\ | |   |   |_|
-  \    /   \__/ \__  \_/   |   | |
-   '--'    sleuth - the research gremlin
+   ____  _            _   _
+  / ___|| | ___ _   _| |_| |__
+  \___ \| |/ _ \ | | | __| '_ \
+   ___) | |  __/ |_| | |_| | | |
+  |____/|_|\___|\__,_|\__|_| |_|
+       a pocket research gremlin
 ```
 
 ## What it does
