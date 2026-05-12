@@ -16,10 +16,16 @@ from sleuth.config import get_settings
 
 
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
+DEFAULT_FOLDER_NAME = "Sleuth"
 
 
 class DriveNotConfigured(RuntimeError):
     pass
+
+
+# --------------------------------------------------------------------------- #
+# token i/o
+# --------------------------------------------------------------------------- #
 
 
 def _load_credentials():
@@ -27,7 +33,7 @@ def _load_credentials():
     token_path = settings.drive_token_path
     if not token_path.exists():
         raise DriveNotConfigured(
-            "Drive token not found. Run `sleuth drive auth` first."
+            "no Drive token. run `sleuth drive login` first."
         )
 
     try:
@@ -35,7 +41,7 @@ def _load_credentials():
         from google.auth.transport.requests import Request  # type: ignore
     except ImportError as e:
         raise DriveNotConfigured(
-            "Drive deps missing. Install with: pip install '.[drive]'"
+            "drive deps missing. install with: pip install '.[drive]'"
         ) from e
 
     creds = Credentials.from_authorized_user_info(
@@ -44,51 +50,138 @@ def _load_credentials():
     if creds.expired and creds.refresh_token:
         creds.refresh(Request())
         token_path.write_text(creds.to_json())
+        try:
+            token_path.chmod(0o600)
+        except OSError:
+            pass
     return creds
 
 
-def authorise_interactive() -> Path:
-    """Run the device-flow auth and save the token.
+def is_configured() -> bool:
+    return get_settings().drive_token_path.exists()
 
-    Uses Google's Device Authorization Grant so this works on a headless
-    Pi — sleuth prints a URL + 8-character code (with a QR), you authorise
-    on your phone or laptop, the Pi polls until done.
+
+def logout() -> bool:
+    """Delete the saved token. Returns True if a token was removed."""
+    settings = get_settings()
+    if settings.drive_token_path.exists():
+        settings.drive_token_path.unlink()
+        return True
+    return False
+
+
+# --------------------------------------------------------------------------- #
+# auth (new primary entrypoint)
+# --------------------------------------------------------------------------- #
+
+
+def login(
+    *,
+    explicit_client_secret_path: Optional[Path] = None,
+) -> Path:
+    """Run device-flow auth using whichever OAuth client is configured.
+
+    Returns the path to the saved token.
     """
     settings = get_settings()
-    secret = settings.gdrive_client_secret_path
-    if not secret or not Path(secret).exists():
-        raise DriveNotConfigured(
-            "Set GDRIVE_CLIENT_SECRET_PATH in .env to your client_secret*.json.\n"
-            "Run `sleuth drive setup` for a guided walkthrough."
-        )
-
-    from sleuth.storage.gdrive_device import device_flow_authorise, DeviceFlowError
+    from sleuth.storage.drive_client import resolve_client, NoClientConfigured
+    from sleuth.storage.gdrive_device import (
+        device_flow_authorise_with, DeviceFlowError,
+    )
 
     try:
-        return device_flow_authorise(Path(secret), settings.drive_token_path)
+        info = resolve_client(explicit_path=explicit_client_secret_path)
+    except NoClientConfigured as e:
+        raise DriveNotConfigured(str(e)) from e
+
+    try:
+        return device_flow_authorise_with(
+            client_id=info.client_id,
+            client_secret=info.client_secret,
+            token_out=settings.drive_token_path,
+        )
     except DeviceFlowError as e:
         raise DriveNotConfigured(f"device flow failed: {e}") from e
 
 
-def upload_doc(title: str, body_markdown: str) -> str:
-    """Upload markdown content as a Google Doc and return its URL."""
-    creds = _load_credentials()
+# Backward-compat shim used by older code paths.
+def authorise_interactive() -> Path:
+    return login()
 
+
+# --------------------------------------------------------------------------- #
+# Drive API helpers (account info, folder management)
+# --------------------------------------------------------------------------- #
+
+
+def _drive_service():
+    creds = _load_credentials()
     try:
         from googleapiclient.discovery import build  # type: ignore
+    except ImportError as e:
+        raise DriveNotConfigured(
+            "drive deps missing. install with: pip install '.[drive]'"
+        ) from e
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+
+def whoami() -> Optional[str]:
+    """Return the email address the saved token belongs to, or None."""
+    try:
+        svc = _drive_service()
+        info = svc.about().get(fields="user(emailAddress)").execute()
+        return info.get("user", {}).get("emailAddress")
+    except Exception:
+        return None
+
+
+def ensure_sleuth_folder(name: str = DEFAULT_FOLDER_NAME) -> str:
+    """Find or create a folder by name in My Drive root. Returns its id."""
+    svc = _drive_service()
+    q = (
+        f"name = '{name}' and mimeType = 'application/vnd.google-apps.folder' "
+        "and 'root' in parents and trashed = false"
+    )
+    resp = svc.files().list(q=q, fields="files(id, name)", pageSize=1).execute()
+    files = resp.get("files", [])
+    if files:
+        return files[0]["id"]
+    created = svc.files().create(
+        body={"name": name, "mimeType": "application/vnd.google-apps.folder"},
+        fields="id",
+    ).execute()
+    return created["id"]
+
+
+# --------------------------------------------------------------------------- #
+# upload
+# --------------------------------------------------------------------------- #
+
+
+def upload_doc(title: str, body_markdown: str) -> str:
+    """Upload markdown content as a Google Doc and return its URL."""
+    try:
         from googleapiclient.http import MediaIoBaseUpload  # type: ignore
     except ImportError as e:
         raise DriveNotConfigured(
-            "Drive deps missing. Install with: pip install '.[drive]'"
+            "drive deps missing. install with: pip install '.[drive]'"
         ) from e
 
-    drive = build("drive", "v3", credentials=creds, cache_discovery=False)
+    drive = _drive_service()
+
+    settings = get_settings()
+    folder_id = settings.gdrive_folder_id
+    if not folder_id:
+        # auto-create / find the Sleuth folder so output doesn't sprawl
+        try:
+            folder_id = ensure_sleuth_folder()
+        except Exception:
+            folder_id = None  # tolerate failure; just dump in root
 
     metadata: dict[str, Any] = {
         "name": title,
         "mimeType": "application/vnd.google-apps.document",
     }
-    folder_id = get_settings().gdrive_folder_id
     if folder_id:
         metadata["parents"] = [folder_id]
 
@@ -105,7 +198,3 @@ def upload_doc(title: str, body_markdown: str) -> str:
     ).execute()
 
     return file.get("webViewLink") or f"https://docs.google.com/document/d/{file['id']}"
-
-
-def is_configured() -> bool:
-    return get_settings().drive_token_path.exists()

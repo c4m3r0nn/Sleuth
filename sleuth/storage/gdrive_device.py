@@ -171,18 +171,41 @@ def poll_for_token(
     raise DeviceFlowError("verification window expired without authorization")
 
 
-def device_flow_authorise(client_secret_path: Path, token_out: Path) -> Path:
-    """Run the whole flow and write the resulting token to `token_out`.
+def device_flow_authorise_with(
+    *,
+    client_id: str,
+    client_secret: str,
+    token_out: Path,
+) -> Path:
+    """Run device flow with explicit client id/secret. Returns token path."""
+    return _run_device_flow(
+        client_id=client_id, client_secret=client_secret, token_out=token_out,
+    )
 
-    Returns `token_out` on success. Prints the user code + a QR for the
-    verification URL while polling.
+
+def device_flow_authorise(client_secret_path: Path, token_out: Path) -> Path:
+    """Legacy entrypoint that loads client_id/secret from a JSON file.
+
+    Prefer `device_flow_authorise_with` for new callers — it accepts the
+    id/secret directly so callers can read them from anywhere (env, baked
+    constants, file).
     """
+    data = json.loads(Path(client_secret_path).read_text())
+    client_id, client_secret = _extract_client_info(data)
+    return _run_device_flow(
+        client_id=client_id, client_secret=client_secret, token_out=token_out,
+    )
+
+
+def _run_device_flow(
+    *,
+    client_id: str,
+    client_secret: str,
+    token_out: Path,
+) -> Path:
     from sleuth.ui import console
     from sleuth.ui.console import bonk, tick
     from rich.text import Text
-
-    data = json.loads(Path(client_secret_path).read_text())
-    client_id, client_secret = _extract_client_info(data)
 
     flow = request_device_code(client_id)
     user_code = flow["user_code"]
@@ -224,5 +247,9 @@ def device_flow_authorise(client_secret_path: Path, token_out: Path) -> Path:
     )
     token_out.parent.mkdir(parents=True, exist_ok=True)
     token_out.write_text(json.dumps(payload, indent=2))
+    try:
+        token_out.chmod(0o600)
+    except OSError:
+        pass  # windows doesn't support chmod the same way; ignore
     tick(f"token saved to {token_out}")
     return token_out

@@ -46,7 +46,14 @@ class Settings(BaseSettings):
     # discord
     discord_webhook_url: Optional[str] = Field(default=None, alias="DISCORD_WEBHOOK_URL")
 
-    # google drive
+    # google drive — built-in shared client (if maintainer / user set them)
+    google_client_id: Optional[str] = Field(
+        default=None, alias="SLEUTH_GOOGLE_CLIENT_ID",
+    )
+    google_client_secret: Optional[str] = Field(
+        default=None, alias="SLEUTH_GOOGLE_CLIENT_SECRET",
+    )
+    # google drive — legacy per-user secret file (still supported)
     gdrive_client_secret_path: Optional[str] = Field(
         default=None, alias="GDRIVE_CLIENT_SECRET_PATH"
     )

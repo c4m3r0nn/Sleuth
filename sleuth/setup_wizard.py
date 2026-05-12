@@ -360,28 +360,11 @@ def run_wizard(env_path: Path) -> Path:
 
     # 4. drive
     header("step 4", "google drive sync (optional)")
-    if existing.get("GDRIVE_CLIENT_SECRET_PATH"):
-        action, new_val = _keep_replace_remove(
-            typer, "drive client_secret path", existing["GDRIVE_CLIENT_SECRET_PATH"],
-            hide_input=False,
-        )
-        if action == "replace" and new_val:
-            final["GDRIVE_CLIENT_SECRET_PATH"] = new_val
-        elif action == "remove":
-            final.pop("GDRIVE_CLIENT_SECRET_PATH", None)
-            final.pop("GDRIVE_FOLDER_ID", None)
-    else:
-        if typer.confirm("  point me at a Drive client_secret.json?", default=False):
-            console.print(
-                "    if you don't have one yet, see\n"
-                "    https://developers.google.com/workspace/guides/create-credentials"
-            )
-            sp = typer.prompt("    path to client_secret*.json", default="", show_default=False).strip()
-            fid = typer.prompt("    parent Drive folder id (blank for root)", default="", show_default=False).strip()
-            if sp:
-                final["GDRIVE_CLIENT_SECRET_PATH"] = sp
-            if fid:
-                final["GDRIVE_FOLDER_ID"] = fid
+    console.print(
+        "  drive sync is wired up separately so we don't slow down setup.\n"
+        "  after this finishes, run:  sleuth drive login\n"
+        "  that'll show a QR + code; scan with your phone, tap allow, done."
+    )
 
     # 5. write
     backup = write_env_file(env_path, final, sections=ENV_SECTIONS)

@@ -155,7 +155,10 @@ Ctrl-D or `exit`/`quit`/`q` leaves. Up/down browses history (saved at
 | `sleuth jobs rm <id>` | Delete the job. |
 | `sleuth history` | See past runs. |
 | `sleuth show <run_id>` | Dump a past run's full output. |
-| `sleuth drive auth` | Authorise Google Drive sync (one-time). |
+| `sleuth drive login` | Connect Google Drive (QR + 8-char code). |
+| `sleuth drive logout` | Delete the local Drive token. |
+| `sleuth drive status` | Show client + account + folder. |
+| `sleuth drive doctor` | Diagnose Drive setup end to end. |
 | `sleuth ping` | Send a test nudge to every configured channel. |
 | `sleuth setup` | Interactive wizard for first-run configuration. |
 | `sleuth init` | Show config status (no changes). |
@@ -249,79 +252,96 @@ research beats five stale snapshots.
 
 ## Google Drive sync
 
-sleuth can optionally mirror every run to a Google Doc. The setup is
-**per-user** — your credentials never touch the repo, and the gitignore
-already excludes the files that would be sensitive. If you fork or share
-this repo, the next person needs to run `sleuth drive setup` for their
-own account; nothing leaks from yours.
-
-### One-time setup
+sleuth can mirror every run to a Google Doc. Connecting your account is one
+command:
 
 ```bash
-sleuth drive setup
+sleuth drive login
 ```
 
-The walkthrough opens the relevant Google Cloud Console pages and asks
-you for the path to the downloaded `client_secret*.json`. Click-by-click
-it'll have you:
+You'll see a QR code + 8-character code in the terminal. Scan with your
+phone, tap **allow** on Google's page, and the Pi catches the token and
+saves it (chmod 600, in `~/.config/sleuth/`). No browser needed on the Pi.
 
-1. **Create a tiny Cloud project** (called "sleuth" or whatever).
-2. **Enable the Drive API** on it.
-3. **Configure the OAuth consent screen** as "external" with yourself as
-   a test user. (No publishing, no review — test mode is fine for one
-   person.)
-4. **Create an OAuth client** of type **"TVs and Limited Input devices"**.
-   Download the JSON it offers.
-5. **Tell sleuth where that file is.** sleuth writes the path to your
-   `.env` (gitignored) and writes the long-lived auth token to
-   `~/.config/sleuth/drive_token.json` (outside the repo entirely).
+Then use it:
 
-### Authorising on a headless Pi
-
-`sleuth drive setup` (or `sleuth drive auth` once setup is done) uses
-**Google's Device Authorization Grant** — exactly the same flow GitHub
-CLI uses for `gh auth login`. You see something like this in the Pi
-terminal:
-
-```
-  authorise sleuth on your Google account:
-
-      ████ ▄▄▄▄▄ █▀█ █▀ ▄ ▀ ████
-      ████ █   █ █ ▀▀▄▄▀▀█ ████
-      ...
-
-  scan the QR above, or open: https://www.google.com/device
-  and enter this code:  ABCD-EFGH
-
-  waiting up to 30 min for you to authorise...
+```bash
+sleuth ask --drive "what's happening in AI today?"
+# or toggle 'drive' on a saved job during `sleuth jobs new` / `sleuth jobs edit`
 ```
 
-Scan the QR with your phone (or any device with a browser), tap **allow**
-on Google's page, and the Pi catches the token and saves it. No browser
-needed on the Pi itself.
+Other commands:
+
+```bash
+sleuth drive status    # show client + account + folder
+sleuth drive doctor    # diagnose end to end
+sleuth drive logout    # delete the local token
+```
+
+### Where does the OAuth client come from?
+
+sleuth uses Google OAuth, which means it identifies itself with a
+**client_id + client_secret**. There are three places it'll look (in
+priority order):
+
+1. **`--client-secrets PATH`** flag — your own per-user `client_secret*.json`
+   from Google Cloud Console.
+2. **Env vars** in `.env`:
+   ```
+   SLEUTH_GOOGLE_CLIENT_ID=...
+   SLEUTH_GOOGLE_CLIENT_SECRET=...
+   ```
+3. **Built-in constants** in `sleuth/storage/drive_client.py` — for a
+   maintainer who wants to publish a fork where users never have to touch
+   Google Cloud at all.
+
+Of these, **#2 (env vars in `.env`) is the right choice for almost everyone.**
+You create one OAuth client once (see below), drop the two values in your
+`.env`, and from then on every `sleuth drive login` Just Works.
+
+> **Why isn't there a built-in shared client already?** Google requires
+> apps with Drive scopes to go through OAuth verification before they can
+> be distributed without showing a scary "unverified app" warning. That's
+> a real process (homepage, privacy policy, demo video). Until somebody
+> publishes a verified fork of sleuth, every user creates their own tiny
+> Google Cloud project. The good news is: it's a one-time, five-minute
+> setup, and the result is *your* token going to *your* Drive with no
+> middleman.
+
+### One-time OAuth client creation (only once per Google account)
+
+1. Make a project: <https://console.cloud.google.com/projectcreate>
+2. Enable Drive API: <https://console.cloud.google.com/apis/library/drive.googleapis.com>
+3. Configure consent screen as **external**, add yourself as a test user:
+   <https://console.cloud.google.com/apis/credentials/consent>
+4. Create OAuth client of type **"TVs and Limited Input devices"**:
+   <https://console.cloud.google.com/apis/credentials/oauthclient>
+5. Either download the JSON and pass it via `--client-secrets PATH`, or
+   copy the **client_id** and **client_secret** into your `.env`:
+   ```
+   SLEUTH_GOOGLE_CLIENT_ID=xxxxxxxx.apps.googleusercontent.com
+   SLEUTH_GOOGLE_CLIENT_SECRET=GOCSPX-xxxxxxxx
+   ```
+6. Run `sleuth drive login`.
+
+### Scope used
+
+sleuth requests **only** `https://www.googleapis.com/auth/drive.file` —
+which means it can **only** see/edit files it created itself, or files you
+explicitly hand it. It cannot read your existing Drive contents. This is
+Google's recommended narrow scope for tools like this.
 
 ### What gets shared if you share the repo?
 
 | File | Where | Committed? |
 | --- | --- | --- |
-| `.env` (your provider keys, Drive path) | project root | **no** — gitignored |
-| `client_secret*.json` (Google OAuth client) | wherever you put it | **no** — name pattern is gitignored |
+| `.env` (provider keys, Drive client id/secret, folder id) | project root | **no** — gitignored |
+| `client_secret*.json` (if you use --client-secrets) | wherever you put it | **no** — name pattern gitignored |
 | `~/.config/sleuth/drive_token.json` (auth token) | your home | **no** — outside repo |
-| `data/sleuth.db` (your run history) | project root | **no** — gitignored |
+| `data/sleuth.db` (run history) | project root | **no** — gitignored |
 
-So pushing your fork is safe — only code goes up.
-
-### Using it
-
-Once setup is done, pass `--drive` on any one-off ask:
-
-```bash
-sleuth ask --drive "what happened in AI today?"
-```
-
-Or toggle it on a saved job during `jobs new` / `jobs edit`. Each run
-becomes one Google Doc, optionally inside the folder ID you specified
-during setup.
+Pushing your fork is safe — only code goes up. The next person who clones
+runs `sleuth drive login` with their own OAuth client.
 
 ## Notifications
 
