@@ -222,12 +222,37 @@ def needs_walkthrough(tokens: list[str]) -> Optional[str]:
 # --------------------------------------------------------------------------- #
 
 
+def _walkthrough_prompt_label(question: str):
+    """FormattedText with the question on one line and `  > ` on the next."""
+    from prompt_toolkit.formatted_text import FormattedText
+    return FormattedText([
+        ("class:wkq", f"  {question}\n"),
+        ("class:wkprompt", "  > "),
+    ])
+
+
+def _walkthrough_style():
+    """Style for walkthrough text prompts.
+
+    `class:wkq` colors the question, `class:wkprompt` colors the `>` cue,
+    and `""` (the empty-key style) colors what the user actually types so
+    their input is visually distinct from sleuth's text.
+    """
+    from prompt_toolkit.styles import Style
+    return Style.from_dict({
+        "wkq":       "ansibrightcyan",
+        "wkprompt":  "ansibrightyellow bold",
+        "":          "ansibrightyellow",
+    })
+
+
 def _ask_text(question: str, default: str = "") -> str:
     from prompt_toolkit import prompt as pt_prompt
-    from prompt_toolkit.formatted_text import FormattedText
-
-    label = FormattedText([("class:wkq", f"  {question} "), ("", "")])
-    answer = pt_prompt(label, default=default)
+    answer = pt_prompt(
+        _walkthrough_prompt_label(question),
+        default=default,
+        style=_walkthrough_style(),
+    )
     return answer.strip()
 
 
