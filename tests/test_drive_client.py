@@ -27,6 +27,33 @@ class TestEnvVarSource:
         assert info.client_secret == "env-secret"
         assert info.source == "env"
 
+    def test_values_from_dotenv_file(self, monkeypatch, tmp_path):
+        """Values in .env must be picked up even if they're NOT in os.environ.
+
+        Pydantic-settings loads the .env file into the Settings object but
+        doesn't push the keys back into os.environ. The resolver has to read
+        from Settings, not from os.environ directly.
+        """
+        env_file = tmp_path / "dotenv"
+        env_file.write_text(
+            "SLEUTH_GOOGLE_CLIENT_ID=dotenv-id\n"
+            "SLEUTH_GOOGLE_CLIENT_SECRET=dotenv-secret\n"
+        )
+        # Override the autouse-fixture's "nope.env" pointer with our file.
+        import sleuth.config as cfg
+        monkeypatch.setitem(cfg.Settings.model_config, "env_file", str(env_file))
+        cfg._settings = None
+
+        # Make sure os.environ does NOT have these — that's the whole point.
+        assert "SLEUTH_GOOGLE_CLIENT_ID" not in __import__("os").environ
+        assert "SLEUTH_GOOGLE_CLIENT_SECRET" not in __import__("os").environ
+
+        from sleuth.storage.drive_client import resolve_client
+        info = resolve_client()
+        assert info.client_id == "dotenv-id"
+        assert info.client_secret == "dotenv-secret"
+        assert info.source == "env"
+
     def test_partial_env_skipped(self, monkeypatch, tmp_path):
         """Only id but no secret -> ignore env and fall through."""
         monkeypatch.setenv("SLEUTH_GOOGLE_CLIENT_ID", "only-id")

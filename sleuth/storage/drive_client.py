@@ -84,9 +84,14 @@ def resolve_client(*, explicit_path: Optional[Path] = None) -> ClientInfo:
         cid, csec = _load_secret_file(p)
         return ClientInfo(cid, csec, source="file", source_path=p)
 
-    # 2. env vars
-    env_id = os.environ.get("SLEUTH_GOOGLE_CLIENT_ID", "").strip()
-    env_secret = os.environ.get("SLEUTH_GOOGLE_CLIENT_SECRET", "").strip()
+    # 2. env vars (loaded from .env by pydantic-settings, OR from process env).
+    # We read from Settings rather than os.environ directly because
+    # pydantic-settings loads .env into the Settings object but doesn't push
+    # the keys back into os.environ.
+    from sleuth.config import get_settings
+    settings = get_settings()
+    env_id = (settings.google_client_id or "").strip()
+    env_secret = (settings.google_client_secret or "").strip()
     if env_id and env_secret:
         return ClientInfo(env_id, env_secret, source="env")
 
@@ -97,8 +102,6 @@ def resolve_client(*, explicit_path: Optional[Path] = None) -> ClientInfo:
         )
 
     # 4. legacy: GDRIVE_CLIENT_SECRET_PATH points at a per-user JSON
-    from sleuth.config import get_settings
-    settings = get_settings()
     legacy = settings.gdrive_client_secret_path
     if legacy:
         p = Path(legacy).expanduser()
