@@ -31,13 +31,15 @@ from typing import Optional
 # Maintainer-supplied constants. Fill these in to ship a shared OAuth client
 # so users never have to touch Google Cloud Console.
 #
-# How to create one:
-#   1. Go to https://console.cloud.google.com/projectcreate, make a project.
+# How to create one (Google moved the consent screen into a new "Auth
+# Platform" section in 2024, so the URLs below are the current ones):
+#   1. Make a project: console.cloud.google.com/projectcreate
 #   2. Enable Drive API: console.cloud.google.com/apis/library/drive.googleapis.com
-#   3. Configure consent screen (external, add yourself as test user).
-#   4. Create OAuth client:
-#        console.cloud.google.com/apis/credentials/oauthclient
-#      Application type: "TVs and Limited Input devices"
+#   3. Configure on Auth Platform: console.cloud.google.com/auth/overview
+#        - app name + your email
+#        - Audience -> External, then add yourself as a test user
+#   4. Create OAuth client: console.cloud.google.com/auth/clients
+#        - application type: "TVs and Limited Input devices"
 #   5. Copy the client_id and client_secret into the constants below.
 #
 # Alternatively, set SLEUTH_GOOGLE_CLIENT_ID / SLEUTH_GOOGLE_CLIENT_SECRET

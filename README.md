@@ -310,18 +310,25 @@ You create one OAuth client once (see below), drop the two values in your
 
 ### One-time OAuth client creation (only once per Google account)
 
-1. Make a project: <https://console.cloud.google.com/projectcreate>
-2. Enable Drive API: <https://console.cloud.google.com/apis/library/drive.googleapis.com>
-3. Configure consent screen as **external**, add yourself as a test user:
-   <https://console.cloud.google.com/apis/credentials/consent>
-4. Create OAuth client of type **"TVs and Limited Input devices"**:
-   <https://console.cloud.google.com/apis/credentials/oauthclient>
-5. Either download the JSON and pass it via `--client-secrets PATH`, or
-   copy the **client_id** and **client_secret** into your `.env`:
+1. **Make a project**: <https://console.cloud.google.com/projectcreate>
+2. **Enable Drive API**: <https://console.cloud.google.com/apis/library/drive.googleapis.com>
+3. **Configure the app on Google Auth Platform**:
+   <https://console.cloud.google.com/auth/overview>
+   - Click **Get started** if prompted, fill in app name + your email.
+   - **Audience** → choose **External** → save.
+   - **Audience → Test users** → **+ Add users** → your Gmail address.
+   - (No need to publish or submit for verification — test mode is fine
+     for personal use.)
+4. **Create the OAuth client**:
+   <https://console.cloud.google.com/auth/clients>
+   → **+ Create client** → application type **"TVs and Limited Input devices"**.
+5. Copy the **client_id** and **client_secret** into your `.env`:
    ```
    SLEUTH_GOOGLE_CLIENT_ID=xxxxxxxx.apps.googleusercontent.com
    SLEUTH_GOOGLE_CLIENT_SECRET=GOCSPX-xxxxxxxx
    ```
+   (Or download the JSON and pass it via
+   `sleuth drive login --client-secrets PATH`.)
 6. Run `sleuth drive login`.
 
 ### Scope used
