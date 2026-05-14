@@ -366,7 +366,51 @@ def run_wizard(env_path: Path) -> Path:
         "  that'll show a QR + code; scan with your phone, tap allow, done."
     )
 
-    # 5. write
+    # 5. global shim — make `sleuth` work from anywhere
+    header("step 5", "make `sleuth` work from any directory")
+    console.print(
+        "  this installs ~/.local/bin/sleuth -> the venv's binary, so you\n"
+        "  don't have to cd here and activate the venv every time."
+    )
+    if typer.confirm("  install the global shim?", default=True):
+        from sleuth.installer import (
+            default_shim_path, install_shim, local_bin_on_path, sleuth_binary_path,
+        )
+        try:
+            src = sleuth_binary_path()
+            if src is None:
+                bonk("  no `sleuth` binary in this venv; skipping. run `pip install -e .` first.")
+            else:
+                result = install_shim(shim_path=default_shim_path(), source=src, force=True)
+                tick(f"  shim ready: {result}")
+                if not local_bin_on_path():
+                    console.print(
+                        "  warning: ~/.local/bin is NOT on $PATH. add this to ~/.bashrc:\n"
+                        '    export PATH="$HOME/.local/bin:$PATH"\n'
+                        "  then run: exec $SHELL -l"
+                    )
+        except Exception as e:  # noqa: BLE001
+            bonk(f"  couldn't install shim: {e}")
+
+    # 6. cron sanity on Linux/Pi
+    import platform
+    if platform.system() == "Linux":
+        header("step 6", "cron daemon")
+        from sleuth.installer import cron_status, has_cron_binary
+        if not has_cron_binary():
+            bonk("  `cron` is not installed. scheduled jobs won't fire.")
+            console.print("  fix: sudo apt install cron")
+        else:
+            cs = cron_status()
+            if cs == "active":
+                tick("  cron daemon is active.")
+            elif cs == "inactive":
+                bonk("  cron daemon is installed but NOT RUNNING.")
+                console.print("  fix: sudo systemctl enable --now cron")
+            else:
+                console.print(f"  cron status: {cs} — run `sleuth doctor` later if jobs don't fire.")
+
+    # 7. write
     backup = write_env_file(env_path, final, sections=ENV_SECTIONS)
 
     console.print()

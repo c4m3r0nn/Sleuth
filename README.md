@@ -45,45 +45,25 @@ On a Raspberry Pi 5, install the same way (no system packages required).
 
 ## Install globally (so `sleuth` works from any directory)
 
-### Option A: pipx (recommended)
-
-`pipx` installs each tool in its own isolated venv and puts a shim on your
-`$PATH` so you can run `sleuth` from anywhere.
+The setup wizard offers to do this automatically. To do it any time after:
 
 ```bash
-# macOS
-brew install pipx
-pipx ensurepath
-
-# Raspberry Pi (Debian/Ubuntu)
-sudo apt install pipx
-pipx ensurepath
-
-# then, from the project dir:
-pipx install -e .
+sleuth install-shim
 ```
 
-Reopen your shell. `sleuth` should now work from any directory. To upgrade
-later: `git pull && pipx reinstall sleuth-cli`.
+That symlinks `~/.local/bin/sleuth` to the venv's binary. `~/.local/bin` is
+on `$PATH` by default on Pi OS Bookworm and modern macOS, so no further
+config is usually needed. If your `$PATH` doesn't include it,
+`install-shim` will tell you and print the exact line to add to `~/.bashrc`.
 
-### Option B: drop a symlink on PATH (works on a fresh Pi, no extra tools)
-
-```bash
-mkdir -p ~/.local/bin
-ln -sf "$PWD/.venv/bin/sleuth" ~/.local/bin/sleuth
-# make sure ~/.local/bin is on PATH (usually is on Pi OS / modern macOS)
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc   # or ~/.zshrc
-exec $SHELL -l
-```
-
-The symlink keeps editable installs working: `git pull` is enough to update
-the code, no reinstall step needed.
+Editable installs (the default) keep working — `git pull` updates the code
+in place, no reinstall step needed.
 
 ### Verify
 
 ```bash
-which sleuth     # should print the path on PATH
-sleuth --version
+sleuth --version    # works from any directory
+sleuth doctor       # full health check (shim, PATH, cron, jobs)
 ```
 
 ## Interactive shell
@@ -235,10 +215,23 @@ On Raspberry Pi this isn't a thing - cron just works.
 ### Verify on a Pi
 
 ```bash
-systemctl status cron     # should be active (running)
-crontab -l                # should show the sleuth entries
-sleuth jobs check <id>
+sleuth doctor                # checks shim, PATH, cron daemon, scheduled jobs
+systemctl status cron        # should be active (running)
+crontab -l                   # should show the sleuth entries
+sleuth jobs check <id>       # per-job diagnostics
 ```
+
+If cron isn't running on the Pi:
+
+```bash
+sudo apt install cron        # if not installed (Pi OS Lite ships without it)
+sudo systemctl enable --now cron
+```
+
+After that, scheduled jobs fire regardless of whether you're logged in,
+whether the venv is activated, or whether sleuth is "open" anywhere. The
+cron daemon is a system service that wakes up every minute and runs
+whatever's due.
 
 ### Catching up after the Pi was off
 

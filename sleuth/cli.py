@@ -65,6 +65,163 @@ def shell() -> None:
     repl()
 
 
+@app.command("install-shim")
+def install_shim_cmd(
+    force: bool = typer.Option(False, "--force", "-f", help="Replace any existing shim."),
+) -> None:
+    """Create ~/.local/bin/sleuth so the `sleuth` command works anywhere.
+
+    After running this once, you can type `sleuth` from any directory
+    without activating the venv first. ~/.local/bin is on PATH by default
+    on Pi OS Bookworm and modern macOS.
+    """
+    from sleuth.installer import (
+        default_shim_path,
+        install_shim,
+        local_bin_on_path,
+        sleuth_binary_path,
+    )
+
+    source = sleuth_binary_path()
+    if source is None:
+        bonk("no `sleuth` binary in this venv. did you `pip install -e .`?")
+        raise typer.Exit(1)
+
+    shim = default_shim_path()
+    try:
+        result = install_shim(shim_path=shim, source=source, force=force)
+    except FileExistsError as e:
+        bonk(str(e))
+        console.print(Text("  re-run with --force to replace it.", style="muted"))
+        raise typer.Exit(1)
+
+    tick(f"shim ready: {result}  ->  {source}")
+    if not local_bin_on_path():
+        console.print(Text(
+            "  warning: ~/.local/bin is NOT on your $PATH. add this to ~/.bashrc:\n"
+            '    export PATH="$HOME/.local/bin:$PATH"\n'
+            "  then `exec $SHELL -l` to pick it up.",
+            style="warn",
+        ))
+    else:
+        console.print(Text("  ~/.local/bin is on PATH — `sleuth` works from anywhere now.", style="ok"))
+
+
+@app.command("doctor")
+def doctor() -> None:
+    """End-to-end health check: install shim, PATH, cron daemon, scheduled jobs."""
+    import platform
+    from sleuth.installer import (
+        cron_status,
+        default_shim_path,
+        has_cron_binary,
+        local_bin_on_path,
+        sleuth_binary_path,
+    )
+    from sleuth.scheduler import has_catchup_reboot, list_cron
+
+    console.print()
+    header("sleuth doctor", "checking each piece")
+
+    # 1. shim + PATH
+    shim = default_shim_path()
+    bin_ = sleuth_binary_path()
+    if bin_ is None:
+        bonk("no `sleuth` binary in this venv. run `pip install -e .` first.")
+        raise typer.Exit(1)
+    if shim.exists() and shim.is_symlink() and shim.resolve() == bin_.resolve():
+        tick(f"global shim installed: {shim}")
+    else:
+        bonk(f"global shim NOT installed at {shim}")
+        console.print(Text("  fix: sleuth install-shim", style="muted"))
+
+    if local_bin_on_path():
+        tick("~/.local/bin is on $PATH.")
+    else:
+        bonk("~/.local/bin is NOT on $PATH.")
+        console.print(Text(
+            "  fix: add `export PATH=\"$HOME/.local/bin:$PATH\"` to ~/.bashrc, then\n"
+            "       exec $SHELL -l",
+            style="muted",
+        ))
+
+    # 2. cron
+    if platform.system() == "Darwin":
+        console.print(Text(
+            "  (macOS detected: cron requires Full Disk Access for /usr/sbin/cron.\n"
+            "   if scheduled jobs never fire, that's almost certainly why.\n"
+            "   System Settings -> Privacy & Security -> Full Disk Access -> +.)",
+            style="muted",
+        ))
+    else:
+        if not has_cron_binary():
+            bonk("`cron` not installed.")
+            console.print(Text("  fix: sudo apt install cron", style="muted"))
+        else:
+            cs = cron_status()
+            if cs == "active":
+                tick("cron daemon is active.")
+            elif cs == "inactive":
+                bonk("cron daemon is INSTALLED but NOT RUNNING.")
+                console.print(Text(
+                    "  fix: sudo systemctl enable --now cron",
+                    style="muted",
+                ))
+            elif cs == "failed":
+                bonk("cron daemon failed to start.")
+                console.print(Text(
+                    "  fix: sudo systemctl restart cron  &&  systemctl status cron",
+                    style="muted",
+                ))
+            elif cs == "unknown":
+                console.print(Text(
+                    "  cron status: unknown (systemctl unavailable on this OS).",
+                    style="muted",
+                ))
+
+    # 3. @reboot catchup
+    try:
+        if has_catchup_reboot():
+            tick("@reboot catchup line installed.")
+        else:
+            console.print(Text(
+                "  no @reboot catchup line. install with: sleuth catchup --install",
+                style="muted",
+            ))
+    except Exception:
+        pass  # crontab access failed; don't crash the doctor
+
+    # 4. scheduled jobs sanity
+    try:
+        entries = list_cron()
+        store = get_store()
+        scheduled_jobs = [j for j in store.list_jobs() if j.cron_expr]
+        if not scheduled_jobs:
+            console.print(Text("  no scheduled jobs to check.", style="muted"))
+        else:
+            tick(f"{len(scheduled_jobs)} scheduled job(s) in the DB.")
+            entry_ids = {jid for jid, _, _ in entries}
+            db_ids = {j.id for j in scheduled_jobs}
+            missing = db_ids - entry_ids
+            if missing:
+                bonk(f"jobs in DB but missing from crontab: {', '.join(missing)}")
+                console.print(Text("  fix: sleuth jobs reinstall", style="muted"))
+            # entries pointing at old-style command form?
+            from sleuth.scheduler.cron import _venv_sleuth_path
+            expected_prefix = str(_venv_sleuth_path() or "")
+            if expected_prefix:
+                stale = [
+                    jid for jid, _, cmd in entries
+                    if not cmd.lstrip().startswith(expected_prefix)
+                       and " -m sleuth " in cmd and "cd " not in cmd
+                ]
+                if stale:
+                    bonk(f"crontab entries use the old (broken) command form: {', '.join(stale)}")
+                    console.print(Text("  fix: sleuth jobs reinstall", style="muted"))
+    except Exception as e:  # noqa: BLE001
+        console.print(Text(f"  (skipped scheduled-job check: {e})", style="muted"))
+
+
 # --------------------------------------------------------------------------- #
 # top-level: ask, models, history, show, init, ping, _exec
 # --------------------------------------------------------------------------- #
