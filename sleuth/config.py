@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     )
     gdrive_folder_id: Optional[str] = Field(default=None, alias="GDRIVE_FOLDER_ID")
 
+    # reddit — per-user app credentials (app-only OAuth, read-only)
+    reddit_client_id: Optional[str] = Field(default=None, alias="REDDIT_CLIENT_ID")
+    reddit_client_secret: Optional[str] = Field(default=None, alias="REDDIT_CLIENT_SECRET")
+    reddit_user_agent: Optional[str] = Field(default=None, alias="REDDIT_USER_AGENT")
+
     # paths
     data_dir: Path = Field(default=DEFAULT_DATA_DIR, alias="SLEUTH_DATA_DIR")
     output_dir: Path = Field(default=DEFAULT_OUTPUT_DIR, alias="SLEUTH_OUTPUT_DIR")

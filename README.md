@@ -358,6 +358,51 @@ Google's recommended narrow scope for tools like this.
 Pushing your fork is safe — only code goes up. The next person who clones
 runs `sleuth drive login` with their own OAuth client.
 
+## Reddit pre-fetch
+
+Sleuth can pull posts and comments from chosen subreddits before the LLM
+call and prepend them as primary context. Every user brings their own
+Reddit app (read-only, app-only OAuth — no password):
+
+1. Visit <https://www.reddit.com/prefs/apps> while logged in.
+2. **create another app...** → type `script` (or `web app`); name it `sleuth`.
+   Redirect URI can be `http://localhost:8080` (unused here).
+3. Copy the short string under the app name (`CLIENT_ID`) and the `secret`
+   field (`CLIENT_SECRET`) into `.env`:
+   ```
+   REDDIT_CLIENT_ID=...
+   REDDIT_CLIENT_SECRET=...
+   REDDIT_USER_AGENT=sleuth/0.1 by u/yourname
+   ```
+4. Confirm with `sleuth reddit status` then `sleuth reddit test --sub python`.
+
+Use it on a one-off:
+
+```bash
+sleuth ask "what's the python community arguing about this week?" \
+  --reddit --reddit-sub python,learnpython \
+  --reddit-sort top --reddit-time week --reddit-top 10 \
+  --reddit-comments top_replies --reddit-max-comments 25 --reddit-depth 3
+```
+
+Or bake it into a saved job (`sleuth jobs new --reddit ...`, or run
+`sleuth jobs new` bare for the walkthrough). Settings stored on the job:
+
+| Flag | What it does |
+| --- | --- |
+| `--reddit` | Turn pre-fetch on for this run/job. |
+| `--reddit-sub` | Subreddit (repeatable or comma-separated). Default: r/all. |
+| `--reddit-query` | Override the search query (default: same as your prompt). |
+| `--reddit-sort` | `relevance\|top\|new\|hot\|comments` (search) or `hot\|new\|top\|rising` (browse). |
+| `--reddit-time` | `hour\|day\|week\|month\|year\|all` — only used by `top` / `relevance`. |
+| `--reddit-top` | Max posts to include (default 10). |
+| `--reddit-comments` | `none\|top_score\|top_replies\|all` (default `none`). |
+| `--reddit-max-comments` | Cap comments per post (default 20). |
+| `--reddit-depth` | Max comment thread depth (default 3). |
+
+The formatted block is a clearly-delimited markdown section the LLM is told
+to treat as a primary source alongside its own web search.
+
 ## Notifications
 
 sleuth can ping you on **Telegram**, **Discord**, or both when scheduled jobs

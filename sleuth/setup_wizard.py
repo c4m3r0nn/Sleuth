@@ -166,6 +166,7 @@ ENV_SECTIONS: list[tuple[str, list[str]]] = [
     ("telegram", ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]),
     ("discord", ["DISCORD_WEBHOOK_URL"]),
     ("google drive", ["GDRIVE_CLIENT_SECRET_PATH", "GDRIVE_FOLDER_ID"]),
+    ("reddit", ["REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET", "REDDIT_USER_AGENT"]),
 ]
 
 
@@ -366,8 +367,63 @@ def run_wizard(env_path: Path) -> Path:
         "  that'll show a QR + code; scan with your phone, tap allow, done."
     )
 
-    # 5. global shim — make `sleuth` work from anywhere
-    header("step 5", "make `sleuth` work from any directory")
+    # 5. reddit (optional)
+    header("step 5", "reddit pre-fetch (optional)")
+    console.print(
+        "  let sleuth pull posts + comments from chosen subreddits and prepend\n"
+        "  them to the LLM prompt as primary context. each user brings their own\n"
+        "  reddit app (read-only, app-only OAuth — no password)."
+    )
+    rd_id = existing.get("REDDIT_CLIENT_ID")
+    rd_secret = existing.get("REDDIT_CLIENT_SECRET")
+    if rd_id and rd_secret:
+        action, new_val = _keep_replace_remove(
+            typer, "reddit client id", _short(rd_id), hide_input=False,
+        )
+        if action == "replace" and new_val:
+            final["REDDIT_CLIENT_ID"] = new_val
+        elif action == "remove":
+            final.pop("REDDIT_CLIENT_ID", None)
+            final.pop("REDDIT_CLIENT_SECRET", None)
+            final.pop("REDDIT_USER_AGENT", None)
+        if action != "remove":
+            sec_action, sec_val = _keep_replace_remove(
+                typer, "reddit client secret", _short(rd_secret), hide_input=True,
+            )
+            if sec_action == "replace" and sec_val:
+                final["REDDIT_CLIENT_SECRET"] = sec_val
+            elif sec_action == "remove":
+                final.pop("REDDIT_CLIENT_SECRET", None)
+    else:
+        if typer.confirm("  set up reddit pre-fetch now?", default=False):
+            console.print(
+                "    1. visit https://www.reddit.com/prefs/apps  (logged in)\n"
+                "    2. scroll to 'developed applications' -> 'create another app...'\n"
+                "    3. pick type 'script' (or 'web app'); name it 'sleuth'.\n"
+                "       redirect uri can be http://localhost:8080  (unused here).\n"
+                "    4. after create, the short string under the app name is your\n"
+                "       CLIENT_ID; the 'secret' field is your CLIENT_SECRET.\n"
+                "    5. set a user agent string that identifies your bot (reddit\n"
+                "       requires this), e.g. 'sleuth/0.1 by u/yourname'."
+            )
+            cid = typer.prompt(
+                "    client id", default="", show_default=False, hide_input=False,
+            ).strip()
+            csec = typer.prompt(
+                "    client secret", default="", show_default=False, hide_input=True,
+            ).strip()
+            ua = typer.prompt(
+                "    user agent (optional)", default="", show_default=False,
+            ).strip()
+            if cid:
+                final["REDDIT_CLIENT_ID"] = cid
+            if csec:
+                final["REDDIT_CLIENT_SECRET"] = csec
+            if ua:
+                final["REDDIT_USER_AGENT"] = ua
+
+    # 6. global shim — make `sleuth` work from anywhere
+    header("step 6", "make `sleuth` work from any directory")
     console.print(
         "  this installs ~/.local/bin/sleuth -> the venv's binary, so you\n"
         "  don't have to cd here and activate the venv every time."
@@ -392,10 +448,10 @@ def run_wizard(env_path: Path) -> Path:
         except Exception as e:  # noqa: BLE001
             bonk(f"  couldn't install shim: {e}")
 
-    # 6. cron sanity on Linux/Pi
+    # 7. cron sanity on Linux/Pi
     import platform
     if platform.system() == "Linux":
-        header("step 6", "cron daemon")
+        header("step 7", "cron daemon")
         from sleuth.installer import cron_status, has_cron_binary
         if not has_cron_binary():
             bonk("  `cron` is not installed. scheduled jobs won't fire.")

@@ -23,6 +23,7 @@ dependencies = [
   "python-crontab>=3.0",
   "croniter>=2.0",
   "prompt-toolkit>=3.0",
+  "praw>=7.7",
 ]
 
 [project.optional-dependencies]

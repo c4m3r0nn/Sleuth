@@ -28,6 +28,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     cron_expr TEXT,
     sync_drive INTEGER DEFAULT 0,
     notify INTEGER DEFAULT 1,
+    reddit_enabled INTEGER DEFAULT 0,
+    reddit_spec_json TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -82,6 +84,8 @@ class Job:
     cron_expr: Optional[str] = None
     sync_drive: bool = False
     notify: bool = True
+    reddit_enabled: bool = False
+    reddit_spec: Optional[dict[str, Any]] = None
     created_at: str = field(default_factory=utcnow)
     updated_at: str = field(default_factory=utcnow)
 
@@ -106,6 +110,21 @@ class Run:
     output_path: Optional[str] = None
 
 
+_JOB_MIGRATIONS: list[tuple[str, str]] = [
+    # (column name, ALTER TABLE fragment)
+    ("reddit_enabled", "reddit_enabled INTEGER DEFAULT 0"),
+    ("reddit_spec_json", "reddit_spec_json TEXT"),
+]
+
+
+def _migrate_jobs(conn: sqlite3.Connection) -> None:
+    """Idempotent ALTER TABLE for columns added after the original schema."""
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(jobs)")}
+    for col, ddl in _JOB_MIGRATIONS:
+        if col not in cols:
+            conn.execute(f"ALTER TABLE jobs ADD COLUMN {ddl}")
+
+
 class SqliteStore:
     def __init__(self, db_path: Path):
         self.db_path = db_path
@@ -115,6 +134,7 @@ class SqliteStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(SCHEMA)
+        _migrate_jobs(self._conn)
 
     # --- jobs ---
 
@@ -124,14 +144,17 @@ class SqliteStore:
             INSERT INTO jobs (id, name, prompt, provider, model, system,
                               max_tokens, temperature, web_search,
                               schedule_label, cron_expr, sync_drive, notify,
+                              reddit_enabled, reddit_spec_json,
                               created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job.id, job.name, job.prompt, job.provider, job.model,
                 job.system, job.max_tokens, job.temperature,
                 int(job.web_search), job.schedule_label, job.cron_expr,
                 int(job.sync_drive), int(job.notify),
+                int(job.reddit_enabled),
+                json.dumps(job.reddit_spec) if job.reddit_spec else None,
                 job.created_at, job.updated_at,
             ),
         )
@@ -162,8 +185,11 @@ class SqliteStore:
         "name", "prompt", "provider", "model", "system",
         "max_tokens", "temperature",
         "web_search", "sync_drive", "notify",
+        "reddit_enabled", "reddit_spec",
     }
-    _BOOL_FIELDS = {"web_search", "sync_drive", "notify"}
+    _BOOL_FIELDS = {"web_search", "sync_drive", "notify", "reddit_enabled"}
+    _JSON_FIELDS = {"reddit_spec"}
+    _COLUMN_ALIASES = {"reddit_spec": "reddit_spec_json"}
 
     def update_job(self, job_id: str, **fields: Any) -> None:
         """Patch one or more fields on a saved job. Bumps updated_at."""
@@ -178,7 +204,10 @@ class SqliteStore:
         for k, v in fields.items():
             if k in self._BOOL_FIELDS and v is not None:
                 v = int(bool(v))
-            clauses.append(f"{k} = ?")
+            if k in self._JSON_FIELDS:
+                v = json.dumps(v) if v is not None else None
+            col = self._COLUMN_ALIASES.get(k, k)
+            clauses.append(f"{col} = ?")
             values.append(v)
         clauses.append("updated_at = ?")
         values.append(utcnow())
@@ -262,6 +291,15 @@ class SqliteStore:
 
 
 def _row_to_job(row: sqlite3.Row) -> Job:
+    reddit_spec: Optional[dict[str, Any]] = None
+    raw_spec = _row_get(row, "reddit_spec_json")
+    if raw_spec:
+        try:
+            parsed = json.loads(raw_spec)
+            if isinstance(parsed, dict):
+                reddit_spec = parsed
+        except json.JSONDecodeError:
+            reddit_spec = None
     return Job(
         id=row["id"],
         name=row["name"],
@@ -276,9 +314,19 @@ def _row_to_job(row: sqlite3.Row) -> Job:
         cron_expr=row["cron_expr"],
         sync_drive=bool(row["sync_drive"]),
         notify=bool(row["notify"]),
+        reddit_enabled=bool(_row_get(row, "reddit_enabled") or 0),
+        reddit_spec=reddit_spec,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
     )
+
+
+def _row_get(row: sqlite3.Row, key: str) -> Any:
+    """sqlite3.Row.__getitem__ raises if the column is missing; we want None."""
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return None
 
 
 def _row_to_run(row: sqlite3.Row) -> Run:

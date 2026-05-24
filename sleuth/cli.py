@@ -33,8 +33,10 @@ app = typer.Typer(
 )
 jobs_app = typer.Typer(no_args_is_help=True, help="Manage saved jobs and schedules.")
 drive_app = typer.Typer(no_args_is_help=True, help="Google Drive sync helpers.")
+reddit_app = typer.Typer(no_args_is_help=True, help="Reddit pre-fetch helpers.")
 app.add_typer(jobs_app, name="jobs")
 app.add_typer(drive_app, name="drive")
+app.add_typer(reddit_app, name="reddit")
 
 
 def version_callback(value: bool) -> None:
@@ -227,6 +229,57 @@ def doctor() -> None:
 # --------------------------------------------------------------------------- #
 
 
+def _split_csv(values: Optional[list[str]]) -> list[str]:
+    """Accept either ['a,b,c'] or ['a','b','c'] from repeated typer options."""
+    out: list[str] = []
+    for v in values or []:
+        for part in str(v).split(","):
+            p = part.strip()
+            if p.lower().startswith("r/"):
+                p = p[2:].strip()
+            if p:
+                out.append(p)
+    return out
+
+
+def _build_reddit_spec_from_flags(
+    *,
+    enabled: bool,
+    subs: Optional[list[str]],
+    query: Optional[str],
+    sort: Optional[str],
+    time_filter: Optional[str],
+    top_posts: Optional[int],
+    comment_strategy: Optional[str],
+    max_comments: Optional[int],
+    max_depth: Optional[int],
+    fallback_query: Optional[str] = None,
+):
+    """Translate CLI flags into a RedditSearchSpec (or None when disabled)."""
+    from sleuth.sources.reddit import RedditSearchSpec
+
+    if not enabled:
+        return None
+    sublist = _split_csv(subs)
+    eff_query = query if query is not None else fallback_query
+    if eff_query == "":
+        eff_query = None
+    # Sensible default sort: if there's a query, use 'relevance'; otherwise 'hot'.
+    eff_sort = sort or ("relevance" if eff_query else "hot")
+    spec = RedditSearchSpec(
+        subreddits=sublist,
+        query=eff_query,
+        sort=eff_sort,
+        time_filter=time_filter or "week",
+        top_posts=top_posts if top_posts is not None else 10,
+        comment_strategy=comment_strategy or "none",
+        max_comments=max_comments if max_comments is not None else 20,
+        max_comment_depth=max_depth if max_depth is not None else 3,
+    )
+    spec.validate()
+    return spec
+
+
 @app.command()
 def ask(
     prompt: str = typer.Argument(..., help="What you want sleuth to dig up."),
@@ -238,10 +291,52 @@ def ask(
     no_search: bool = typer.Option(False, "--no-search", help="Disable web search for this run."),
     drive: bool = typer.Option(False, "--drive", help="Mirror this run to Google Drive."),
     notify: bool = typer.Option(False, "--notify", help="Ping Telegram when done."),
+    reddit: bool = typer.Option(False, "--reddit", help="Pre-fetch from Reddit and prepend as context."),
+    reddit_sub: Optional[list[str]] = typer.Option(
+        None, "--reddit-sub", help="Subreddit to pull from (repeatable, or comma-separated). Default: r/all.",
+    ),
+    reddit_query: Optional[str] = typer.Option(
+        None, "--reddit-query", help="Override the search query (default: same as prompt).",
+    ),
+    reddit_sort: Optional[str] = typer.Option(
+        None, "--reddit-sort", help="relevance|top|new|hot|comments (search) or hot|new|top|rising (browse).",
+    ),
+    reddit_time: Optional[str] = typer.Option(
+        None, "--reddit-time", help="hour|day|week|month|year|all (used by top/relevance).",
+    ),
+    reddit_top: Optional[int] = typer.Option(
+        None, "--reddit-top", help="Max posts to include (default 10).",
+    ),
+    reddit_comments: Optional[str] = typer.Option(
+        None, "--reddit-comments", help="none|top_score|top_replies|all (default none).",
+    ),
+    reddit_max_comments: Optional[int] = typer.Option(
+        None, "--reddit-max-comments", help="Cap comments per post (default 20).",
+    ),
+    reddit_depth: Optional[int] = typer.Option(
+        None, "--reddit-depth", help="Max comment thread depth (default 3).",
+    ),
     quiet: bool = typer.Option(False, "--quiet", "-q", help="No fancy UI; just the answer."),
 ) -> None:
     """One-off research turn."""
     from sleuth.workflows import run_research
+
+    try:
+        reddit_spec = _build_reddit_spec_from_flags(
+            enabled=reddit,
+            subs=reddit_sub,
+            query=reddit_query,
+            sort=reddit_sort,
+            time_filter=reddit_time,
+            top_posts=reddit_top,
+            comment_strategy=reddit_comments,
+            max_comments=reddit_max_comments,
+            max_depth=reddit_depth,
+            fallback_query=prompt,
+        )
+    except ValueError as e:
+        bonk(f"bad --reddit options: {e}")
+        raise typer.Exit(1)
 
     run_research(
         prompt=prompt,
@@ -253,6 +348,7 @@ def ask(
         web_search=not no_search,
         sync_drive=drive,
         notify=notify,
+        reddit_spec=reddit_spec,
         quiet=quiet,
     )
 
@@ -512,8 +608,19 @@ def jobs_new(
     no_search: bool = typer.Option(False, "--no-search"),
     sync_drive: bool = typer.Option(False, "--drive"),
     notify: bool = typer.Option(True, "--notify/--no-notify"),
+    reddit: bool = typer.Option(False, "--reddit"),
+    reddit_sub: Optional[list[str]] = typer.Option(None, "--reddit-sub"),
+    reddit_query: Optional[str] = typer.Option(None, "--reddit-query"),
+    reddit_sort: Optional[str] = typer.Option(None, "--reddit-sort"),
+    reddit_time: Optional[str] = typer.Option(None, "--reddit-time"),
+    reddit_top: Optional[int] = typer.Option(None, "--reddit-top"),
+    reddit_comments: Optional[str] = typer.Option(None, "--reddit-comments"),
+    reddit_max_comments: Optional[int] = typer.Option(None, "--reddit-max-comments"),
+    reddit_depth: Optional[int] = typer.Option(None, "--reddit-depth"),
 ) -> None:
     """Define a saved job. If you skip flags you'll be prompted."""
+    from sleuth.sources.reddit import spec_to_dict
+
     settings = get_settings()
     if not name:
         name = typer.prompt("Job name (e.g. 'morning-ai-news')")
@@ -527,6 +634,26 @@ def jobs_new(
         except ValueError:
             provider = typer.prompt("Provider (openai|anthropic|google)", default=settings.default_provider)
 
+    reddit_spec_dict = None
+    if reddit:
+        try:
+            spec = _build_reddit_spec_from_flags(
+                enabled=True,
+                subs=reddit_sub,
+                query=reddit_query,
+                sort=reddit_sort,
+                time_filter=reddit_time,
+                top_posts=reddit_top,
+                comment_strategy=reddit_comments,
+                max_comments=reddit_max_comments,
+                max_depth=reddit_depth,
+                fallback_query=prompt,
+            )
+        except ValueError as e:
+            bonk(f"bad --reddit options: {e}")
+            raise typer.Exit(1)
+        reddit_spec_dict = spec_to_dict(spec) if spec else None
+
     job = Job(
         id=new_id(),
         name=name,
@@ -539,6 +666,8 @@ def jobs_new(
         web_search=not no_search,
         sync_drive=sync_drive,
         notify=notify,
+        reddit_enabled=bool(reddit_spec_dict),
+        reddit_spec=reddit_spec_dict,
     )
     get_store().create_job(job)
     tick(f"saved job {job.id} '{job.name}'")
@@ -588,6 +717,30 @@ def jobs_show(job_id: str) -> None:
     fact("next run", format_next_run(job.cron_expr))
     fact("drive", "yes" if job.sync_drive else "no")
     fact("notify", "yes" if job.notify else "no")
+    if job.reddit_enabled and job.reddit_spec:
+        spec = job.reddit_spec
+        subs = spec.get("subreddits") or []
+        sub_label = ", ".join(
+            f"r/{(s[2:].strip() if s.lower().startswith('r/') else s.strip())}"
+            for s in subs
+        ) if subs else "r/all"
+        fact("reddit", sub_label)
+        if spec.get("query"):
+            fact("reddit query", spec["query"])
+        fact(
+            "reddit sort",
+            f"{spec.get('sort','?')} (time: {spec.get('time_filter','?')})",
+        )
+        fact(
+            "reddit posts",
+            f"top {spec.get('top_posts',10)} — comments: {spec.get('comment_strategy','none')}"
+            + (
+                f" (cap {spec.get('max_comments',20)}, depth {spec.get('max_comment_depth',3)})"
+                if spec.get("comment_strategy") != "none" else ""
+            ),
+        )
+    else:
+        fact("reddit", "off")
 
 
 @jobs_app.command("edit")
@@ -603,8 +756,19 @@ def jobs_edit(
     search: Optional[bool] = typer.Option(None, "--search/--no-search"),
     drive: Optional[bool] = typer.Option(None, "--drive/--no-drive"),
     notify: Optional[bool] = typer.Option(None, "--notify/--no-notify"),
+    reddit: Optional[bool] = typer.Option(None, "--reddit/--no-reddit", help="Turn reddit pre-fetch on/off."),
+    reddit_sub: Optional[list[str]] = typer.Option(None, "--reddit-sub", help="Replace the subreddit list."),
+    reddit_query: Optional[str] = typer.Option(None, "--reddit-query"),
+    reddit_sort: Optional[str] = typer.Option(None, "--reddit-sort"),
+    reddit_time: Optional[str] = typer.Option(None, "--reddit-time"),
+    reddit_top: Optional[int] = typer.Option(None, "--reddit-top"),
+    reddit_comments: Optional[str] = typer.Option(None, "--reddit-comments"),
+    reddit_max_comments: Optional[int] = typer.Option(None, "--reddit-max-comments"),
+    reddit_depth: Optional[int] = typer.Option(None, "--reddit-depth"),
 ) -> None:
     """Patch fields on a saved job. Only passes you give get changed."""
+    from sleuth.sources.reddit import spec_from_dict, spec_to_dict
+
     store = get_store()
     job = store.get_job(job_id)
     if not job:
@@ -624,6 +788,52 @@ def jobs_edit(
     if search is not None: fields["web_search"] = search
     if drive is not None: fields["sync_drive"] = drive
     if notify is not None: fields["notify"] = notify
+
+    # Reddit edits: merge any partial flag with whatever's stored.
+    reddit_touched = any(
+        v is not None for v in (
+            reddit, reddit_sub, reddit_query, reddit_sort, reddit_time,
+            reddit_top, reddit_comments, reddit_max_comments, reddit_depth,
+        )
+    )
+    if reddit is False:
+        fields["reddit_enabled"] = False
+        fields["reddit_spec"] = None
+    elif reddit_touched:
+        existing_spec = spec_from_dict(job.reddit_spec) if job.reddit_spec else None
+        merged_subs = (
+            _split_csv(reddit_sub)
+            if reddit_sub is not None
+            else (existing_spec.subreddits if existing_spec else [])
+        )
+        merged_query = (
+            reddit_query
+            if reddit_query is not None
+            else (existing_spec.query if existing_spec else None)
+        )
+        if merged_query == "":
+            merged_query = None
+        merged_sort = reddit_sort or (existing_spec.sort if existing_spec else None) or (
+            "relevance" if merged_query else "hot"
+        )
+        try:
+            spec = _build_reddit_spec_from_flags(
+                enabled=True,
+                subs=[",".join(merged_subs)] if merged_subs else None,
+                query=merged_query,
+                sort=merged_sort,
+                time_filter=reddit_time or (existing_spec.time_filter if existing_spec else None),
+                top_posts=reddit_top if reddit_top is not None else (existing_spec.top_posts if existing_spec else None),
+                comment_strategy=reddit_comments or (existing_spec.comment_strategy if existing_spec else None),
+                max_comments=reddit_max_comments if reddit_max_comments is not None else (existing_spec.max_comments if existing_spec else None),
+                max_depth=reddit_depth if reddit_depth is not None else (existing_spec.max_comment_depth if existing_spec else None),
+                fallback_query=job.prompt,
+            )
+        except ValueError as e:
+            bonk(f"bad --reddit options: {e}")
+            raise typer.Exit(1)
+        fields["reddit_enabled"] = True
+        fields["reddit_spec"] = spec_to_dict(spec) if spec else None
 
     if not fields:
         bonk("nothing to change. pass at least one option.")
@@ -1029,6 +1239,102 @@ def drive_setup_alias() -> None:
     """Alias for `sleuth drive login`. Kept so older muscle memory still works."""
     console.print(Text("  `drive setup` is now `drive login`. running login...", style="muted"))
     drive_login(client_secrets=None)
+
+
+# --------------------------------------------------------------------------- #
+# reddit subcommands
+# --------------------------------------------------------------------------- #
+
+
+@reddit_app.command("status")
+def reddit_status() -> None:
+    """Show whether Reddit pre-fetch credentials are configured."""
+    from sleuth.sources.reddit import DEFAULT_USER_AGENT, is_configured
+
+    settings = get_settings()
+    console.print()
+    if is_configured():
+        tick("reddit credentials present.")
+        fact("client id", _short_str(settings.reddit_client_id))
+        fact("client secret", _short_str(settings.reddit_client_secret))
+        fact("user agent", settings.reddit_user_agent or DEFAULT_USER_AGENT)
+    else:
+        bonk("reddit not configured.")
+        console.print(Text(
+            "  set REDDIT_CLIENT_ID + REDDIT_CLIENT_SECRET in .env\n"
+            "  or run `sleuth setup` and pick the reddit step.",
+            style="muted",
+        ))
+
+
+@reddit_app.command("test")
+def reddit_test(
+    sub: Optional[list[str]] = typer.Option(
+        None, "--sub", help="Subreddit (repeatable, comma-separated ok). Default: r/python.",
+    ),
+    query: Optional[str] = typer.Option(None, "--query", help="Search query (default: browse only)."),
+    sort: Optional[str] = typer.Option(None, "--sort"),
+    time_filter: Optional[str] = typer.Option(None, "--time"),
+    top: int = typer.Option(3, "--top", help="How many posts to pull."),
+    comments: str = typer.Option("none", "--comments", help="none|top_score|top_replies|all"),
+    max_comments: int = typer.Option(5, "--max-comments"),
+    depth: int = typer.Option(2, "--depth"),
+    raw: bool = typer.Option(False, "--raw", help="Dump the formatted markdown block."),
+) -> None:
+    """Smoke test: pull a few posts to confirm credentials and formatting work."""
+    from sleuth.sources.reddit import (
+        RedditFetchError,
+        fetch as reddit_fetch,
+        format_for_llm,
+        is_configured,
+    )
+
+    if not is_configured():
+        bonk("reddit not configured. run `sleuth setup` first.")
+        raise typer.Exit(1)
+
+    try:
+        spec = _build_reddit_spec_from_flags(
+            enabled=True,
+            subs=sub or ["python"],
+            query=query,
+            sort=sort,
+            time_filter=time_filter,
+            top_posts=top,
+            comment_strategy=comments,
+            max_comments=max_comments,
+            max_depth=depth,
+        )
+    except ValueError as e:
+        bonk(str(e))
+        raise typer.Exit(1)
+
+    try:
+        digest = reddit_fetch(spec)
+    except RedditFetchError as e:
+        bonk(str(e))
+        raise typer.Exit(1)
+
+    tick(f"pulled {len(digest.posts)} post(s).")
+    if raw:
+        console.print()
+        console.print(format_for_llm(digest))
+        return
+    for i, post in enumerate(digest.posts, 1):
+        console.print(Text(f"  {i}. ", style="muted") + Text(post.title[:90], style="paper"))
+        console.print(Text(
+            f"     r/{post.subreddit} · u/{post.author} · score {post.score} · "
+            f"{post.num_comments} comments · {len(post.comments)} pulled",
+            style="muted",
+        ))
+
+
+def _short_str(v: Optional[str]) -> str:
+    if not v:
+        return "(unset)"
+    if len(v) <= 12:
+        return v
+    return f"{v[:6]}...{v[-4:]}"
 
 
 if __name__ == "__main__":

@@ -15,12 +15,13 @@ META_COMMANDS = {"exit", "quit", "q", "help", "?", "clear", "cls"}
 
 _TOP_LEVEL = (
     "ask", "models", "history", "show", "setup", "init", "ping",
-    "jobs", "drive",
+    "jobs", "drive", "reddit",
     "help", "?", "exit", "quit", "q", "clear", "cls",
 )
 _SUBCOMMANDS: dict[str, tuple[str, ...]] = {
     "jobs": ("new", "list", "show", "edit", "rm", "run", "schedule", "unschedule", "crontab"),
     "drive": ("auth", "status"),
+    "reddit": ("status", "test"),
 }
 
 
@@ -75,6 +76,7 @@ _HELP_TEXT = """\
     history               browse past runs
     show                  dump a past run
     drive auth/status     google drive sync
+    reddit status/test    reddit pre-fetch helpers
     models                list available models
     setup                 first-run wizard (writes .env)
     init                  status check

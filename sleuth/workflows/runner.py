@@ -14,6 +14,13 @@ from rich.text import Text
 from sleuth.config import get_settings
 from sleuth.providers import get_provider, provider_for_model
 from sleuth.providers.base import ResearchResult
+from sleuth.sources.reddit import (
+    RedditFetchError,
+    RedditSearchSpec,
+    fetch as reddit_fetch,
+    format_for_llm as reddit_format,
+    spec_from_dict as reddit_spec_from_dict,
+)
 from sleuth.storage import Job, Run, get_store, new_id
 from sleuth.storage.sqlite_store import utcnow
 from sleuth.ui import console, verbs as verb_dict
@@ -24,6 +31,11 @@ from sleuth.ui.console import (
     phase as ui_phase,
     tick,
 )
+
+
+def _strip_r(name: str) -> str:
+    s = name.strip()
+    return s[2:].strip() if s.lower().startswith("r/") else s
 
 
 def _slugify(s: str, max_len: int = 50) -> str:
@@ -124,6 +136,7 @@ def run_research(
     job: Optional[Job] = None,
     sync_drive: bool = False,
     notify: bool = False,
+    reddit_spec: Optional[RedditSearchSpec] = None,
     quiet: bool = False,
     write_file: bool = True,
 ) -> Run:
@@ -138,6 +151,15 @@ def run_research(
             provider_name = provider_for_model(model)
         except ValueError:
             provider_name = settings.default_provider
+
+    # If reddit_spec wasn't passed but the job has one stored, hydrate it.
+    if reddit_spec is None and job is not None and job.reddit_enabled and job.reddit_spec:
+        try:
+            reddit_spec = reddit_spec_from_dict(job.reddit_spec)
+        except Exception as e:  # noqa: BLE001
+            if not quiet:
+                bonk(f"reddit spec on job is malformed; skipping: {e}")
+            reddit_spec = None
 
     store = get_store()
     run_id = new_id()
@@ -158,8 +180,39 @@ def run_research(
         fact("model", model)
         if web_search:
             fact("web search", "on")
+        if reddit_spec is not None:
+            sub_label = (
+                ", ".join(f"r/{_strip_r(s)}" for s in reddit_spec.subreddits)
+                if reddit_spec.subreddits else "r/all"
+            )
+            fact("reddit", f"{sub_label} ({reddit_spec.sort}, top {reddit_spec.top_posts})")
         if job and job.name:
             fact("job", f"{job.name} ({job.id})")
+
+    # Reddit pre-fetch: gather posts/comments, prepend to the prompt as context.
+    effective_prompt = prompt
+    if reddit_spec is not None:
+        try:
+            if not quiet:
+                with ui_phase("search"):
+                    digest = reddit_fetch(reddit_spec)
+            else:
+                digest = reddit_fetch(reddit_spec)
+            block = reddit_format(digest)
+            effective_prompt = (
+                f"{block}\n---\n\n# User question\n\n{prompt}"
+            )
+            if not quiet:
+                tick(
+                    f"reddit: {len(digest.posts)} post(s), "
+                    f"{sum(len(p.comments) for p in digest.posts)} comment(s) included."
+                )
+        except RedditFetchError as e:
+            if not quiet:
+                bonk(f"reddit pre-fetch skipped: {e}")
+        except Exception as e:  # noqa: BLE001
+            if not quiet:
+                bonk(f"reddit pre-fetch error: {type(e).__name__}: {e}")
 
     result: Optional[ResearchResult] = None
     error: Optional[str] = None
@@ -168,7 +221,7 @@ def run_research(
         provider = get_provider(provider_name)
         if quiet:
             result = provider.run(
-                prompt,
+                effective_prompt,
                 model=model,
                 system=system,
                 max_tokens=max_tokens,
@@ -181,7 +234,7 @@ def run_research(
                 # we rotate the verb a few times for life. The actual call
                 # blocks, so we just kick off and wait.
                 result = provider.run(
-                    prompt,
+                    effective_prompt,
                     model=model,
                     system=system,
                     max_tokens=max_tokens,
