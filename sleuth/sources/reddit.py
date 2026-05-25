@@ -35,7 +35,11 @@ VALID_SORTS_BROWSE = ("hot", "new", "top", "rising")
 VALID_TIME_FILTERS = ("hour", "day", "week", "month", "year", "all")
 VALID_COMMENT_STRATEGIES = ("none", "top_score", "top_replies", "all")
 
-DEFAULT_USER_AGENT = "sleuth-cli/0.1 (research assistant)"
+# Reddit enforces "<platform>:<app-id>:<version> (by /u/<username>)".
+# We don't know the user's reddit handle so we leave that suffix off; the
+# wizard nudges users to override this with their own handle. The platform/
+# app-id portion still identifies sleuth, which is the policy's main intent.
+DEFAULT_USER_AGENT = "sleuth:research:0.1 (personal research tool)"
 
 
 class RedditFetchError(RuntimeError):

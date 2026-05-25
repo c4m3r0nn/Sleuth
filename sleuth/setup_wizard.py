@@ -372,7 +372,11 @@ def run_wizard(env_path: Path) -> Path:
     console.print(
         "  let sleuth pull posts + comments from chosen subreddits and prepend\n"
         "  them to the LLM prompt as primary context. each user brings their own\n"
-        "  reddit app (read-only, app-only OAuth — no password)."
+        "  reddit app (read-only, app-only OAuth — no password).\n\n"
+        "  reddit's 2025 'Responsible Builder Policy' applies: this is a\n"
+        "  personal research tool, NOT for redistributing reddit content or\n"
+        "  training models. heavy/academic usage should apply via\n"
+        "  r/reddit4researchers instead. commercial use needs written approval."
     )
     rd_id = existing.get("REDDIT_CLIENT_ID")
     rd_secret = existing.get("REDDIT_CLIENT_SECRET")
@@ -397,14 +401,26 @@ def run_wizard(env_path: Path) -> Path:
     else:
         if typer.confirm("  set up reddit pre-fetch now?", default=False):
             console.print(
-                "    1. visit https://www.reddit.com/prefs/apps  (logged in)\n"
-                "    2. scroll to 'developed applications' -> 'create another app...'\n"
-                "    3. pick type 'script' (or 'web app'); name it 'sleuth'.\n"
-                "       redirect uri can be http://localhost:8080  (unused here).\n"
-                "    4. after create, the short string under the app name is your\n"
-                "       CLIENT_ID; the 'secret' field is your CLIENT_SECRET.\n"
-                "    5. set a user agent string that identifies your bot (reddit\n"
-                "       requires this), e.g. 'sleuth/0.1 by u/yourname'."
+                "    1. log in to reddit, then visit\n"
+                "       https://www.reddit.com/prefs/apps\n"
+                "    2. scroll to the bottom -> 'are you a developer? create an app...'\n"
+                "    3. fill in the form:\n"
+                "         name:         sleuth  (or anything you like)\n"
+                "         type:         script    <- pick this for personal use\n"
+                "         description:  'personal research assistant — read-only,\n"
+                "                        for my own use, no data redistribution'\n"
+                "                        (be specific; reddit now requires a clearly\n"
+                "                        stated purpose under the new policy)\n"
+                "         about url:    leave blank\n"
+                "         redirect uri: http://localhost:8080  (unused but required)\n"
+                "    4. tick the box agreeing to the Responsible Builder Policy.\n"
+                "    5. hit 'create app'. then:\n"
+                "         CLIENT_ID is the short string under 'personal use script'\n"
+                "                   (just below the app name).\n"
+                "         CLIENT_SECRET is the 'secret' field.\n"
+                "    6. set a user agent. reddit enforces this format:\n"
+                "         <platform>:<app-id>:<version> (by /u/<your-username>)\n"
+                "       e.g.  sleuth:research:0.1 (by /u/yourname)"
             )
             cid = typer.prompt(
                 "    client id", default="", show_default=False, hide_input=False,
@@ -413,7 +429,8 @@ def run_wizard(env_path: Path) -> Path:
                 "    client secret", default="", show_default=False, hide_input=True,
             ).strip()
             ua = typer.prompt(
-                "    user agent (optional)", default="", show_default=False,
+                "    user agent  (e.g. 'sleuth:research:0.1 (by /u/yourname)')",
+                default="", show_default=False,
             ).strip()
             if cid:
                 final["REDDIT_CLIENT_ID"] = cid

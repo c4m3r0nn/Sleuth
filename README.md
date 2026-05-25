@@ -362,19 +362,54 @@ runs `sleuth drive login` with their own OAuth client.
 
 Sleuth can pull posts and comments from chosen subreddits before the LLM
 call and prepend them as primary context. Every user brings their own
-Reddit app (read-only, app-only OAuth — no password):
+Reddit app (read-only, app-only OAuth — no password).
 
-1. Visit <https://www.reddit.com/prefs/apps> while logged in.
-2. **create another app...** → type `script` (or `web app`); name it `sleuth`.
-   Redirect URI can be `http://localhost:8080` (unused here).
-3. Copy the short string under the app name (`CLIENT_ID`) and the `secret`
-   field (`CLIENT_SECRET`) into `.env`:
+> **Reddit's [Responsible Builder Policy] applies.** Sleuth is intended for
+> *personal research use*: read-only retrieval that you don't redistribute
+> and don't use to train models. Commercial use needs explicit written
+> approval from Reddit; heavy academic use should go through
+> [r/reddit4researchers] instead of the standard developer flow.
+
+[Responsible Builder Policy]: https://support.reddithelp.com/hc/en-us/articles/42728983564564-Responsible-Builder-Policy
+[r/reddit4researchers]: https://www.reddit.com/r/reddit4researchers/
+
+### Create your app
+
+1. Log in to Reddit, then visit <https://www.reddit.com/prefs/apps>.
+2. Scroll to the bottom and click **are you a developer? create an app...**
+3. Fill in the form:
+   - **name**: `sleuth` (or anything you like)
+   - **app type**: `script` — this is the right choice for personal use.
+   - **description**: be specific about purpose and scope, e.g.
+     *"personal research assistant — read-only, for my own use, no data
+     redistribution"*. Reddit now requires a clearly-stated purpose.
+   - **about url**: leave blank.
+   - **redirect uri**: `http://localhost:8080` (unused but required).
+4. Tick the box agreeing to the Responsible Builder Policy.
+5. Click **create app**. After it's created:
+   - The short string under "personal use script" (just below the app name)
+     is your **CLIENT_ID**.
+   - The **secret** field is your **CLIENT_SECRET**.
+6. Set a user-agent string. Reddit enforces this format:
    ```
-   REDDIT_CLIENT_ID=...
-   REDDIT_CLIENT_SECRET=...
-   REDDIT_USER_AGENT=sleuth/0.1 by u/yourname
+   <platform>:<app-id>:<version> (by /u/<your-username>)
    ```
-4. Confirm with `sleuth reddit status` then `sleuth reddit test --sub python`.
+   For example: `sleuth:research:0.1 (by /u/yourname)`.
+
+### Put the values in `.env`
+
+```
+REDDIT_CLIENT_ID=...
+REDDIT_CLIENT_SECRET=...
+REDDIT_USER_AGENT=sleuth:research:0.1 (by /u/yourname)
+```
+
+Confirm everything works:
+
+```bash
+sleuth reddit status
+sleuth reddit test --sub python
+```
 
 Use it on a one-off:
 
